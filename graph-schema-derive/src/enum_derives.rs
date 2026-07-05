@@ -313,9 +313,7 @@ mod tests {
                 return None;
             };
             let trait_matches = impl_block.trait_.as_ref().is_some_and(|(_, path, _)| {
-                path.segments
-                    .last()
-                    .is_some_and(|s| s.ident == trait_name)
+                path.segments.last().is_some_and(|s| s.ident == trait_name)
             });
             let type_matches = match impl_block.self_ty.as_ref() {
                 syn::Type::Path(tp) => tp

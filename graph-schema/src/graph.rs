@@ -348,7 +348,7 @@ impl<S: Schema> GraphDiff<S> {
     {
         self.add_edge_inner(src.into(), dst.into(), kind, property)
     }
-    
+
     fn add_edge_inner(
         &mut self,
         src: NewOrExistingNode,

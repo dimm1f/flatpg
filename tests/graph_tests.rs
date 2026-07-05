@@ -452,12 +452,7 @@ fn add_edge_between_new_and_existing_node() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     let b_id = diff.add_node(builders::BNodeBuilder::new().build());
-    diff.add_edge(
-        a_ref,
-        b_id,
-        TestEdge::Plain,
-        None,
-    );
+    diff.add_edge(a_ref, b_id, TestEdge::Plain, None);
     let graph = diff.apply(graph).expect("apply diff");
 
     let b = graph.nodes_by_kind(TestNode::B).next().expect("B node");
@@ -526,8 +521,14 @@ fn remove_first_of_many_nodes_preserves_others() {
 
     assert_eq!(graph.node_count_by_kind(TestNode::A), 2);
     let remaining: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
-    assert_eq!(ANode::new(&graph, remaining[0].seq()).key().unwrap(), "b.rs");
-    assert_eq!(ANode::new(&graph, remaining[1].seq()).key().unwrap(), "c.rs");
+    assert_eq!(
+        ANode::new(&graph, remaining[0].seq()).key().unwrap(),
+        "b.rs"
+    );
+    assert_eq!(
+        ANode::new(&graph, remaining[1].seq()).key().unwrap(),
+        "c.rs"
+    );
 }
 
 #[test]
@@ -541,8 +542,14 @@ fn remove_middle_of_many_nodes_preserves_others() {
 
     assert_eq!(graph.node_count_by_kind(TestNode::A), 2);
     let remaining: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
-    assert_eq!(ANode::new(&graph, remaining[0].seq()).key().unwrap(), "a.rs");
-    assert_eq!(ANode::new(&graph, remaining[1].seq()).key().unwrap(), "c.rs");
+    assert_eq!(
+        ANode::new(&graph, remaining[0].seq()).key().unwrap(),
+        "a.rs"
+    );
+    assert_eq!(
+        ANode::new(&graph, remaining[1].seq()).key().unwrap(),
+        "c.rs"
+    );
 }
 
 #[test]
@@ -556,12 +563,18 @@ fn remove_last_of_many_nodes_preserves_others() {
 
     assert_eq!(graph.node_count_by_kind(TestNode::A), 2);
     let remaining: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
-    assert_eq!(ANode::new(&graph, remaining[0].seq()).key().unwrap(), "a.rs");
-    assert_eq!(ANode::new(&graph, remaining[1].seq()).key().unwrap(), "b.rs");
+    assert_eq!(
+        ANode::new(&graph, remaining[0].seq()).key().unwrap(),
+        "a.rs"
+    );
+    assert_eq!(
+        ANode::new(&graph, remaining[1].seq()).key().unwrap(),
+        "b.rs"
+    );
 }
 
-fn setup_graph_with_fan_out_edges()
--> (Graph<TestSchema>, Node<TestSchema>, Vec<Node<TestSchema>>) {
+fn setup_graph_with_fan_out_edges() -> (Graph<TestSchema>, Node<TestSchema>, Vec<Node<TestSchema>>)
+{
     let mut setup = GraphDiff::<TestSchema>::default();
     let a_id = setup.add_node(builders::ANodeBuilder::new().build());
     let b_ids: Vec<_> = (0..3)
