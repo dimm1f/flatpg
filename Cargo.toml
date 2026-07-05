@@ -1,0 +1,23 @@
+[workspace]
+members = ["graph-schema", "graph-schema-derive"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Dimm1F"]
+repository = "https://github.com/dimm1f/flatpg"
+license = "Apache-2.0"
+
+[package]
+name = "flatpg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "A schema-driven labeled property graph library for Rust, built on compact flat storage for memory-efficient graphs"
+readme = "README.md"
+
+[dependencies]
+graph-schema = { path = "graph-schema" }
+graph-schema-derive = { path = "graph-schema-derive" }

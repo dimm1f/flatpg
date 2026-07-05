@@ -1,0 +1,11 @@
+[package]
+name = "graph-schema"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Core schema traits and compact flat storage underlying flatpg's memory-efficient labeled property graphs"
+
+[dependencies]
+thiserror = "2"

@@ -1,0 +1,17 @@
+[package]
+name = "graph-schema-derive"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Procedural macros for deriving flatpg labeled property graph node, edge, and property types"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0.103"
+graph-schema = { path = "../graph-schema" }
