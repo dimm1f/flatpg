@@ -2,16 +2,19 @@
 
 flatpg - **FLAT** **P**roperty **G**raph - a schema-driven labeled property graph library for Rust, built on compact flat storage for memory-efficient graphs.
 
-Node, edge, and property kinds are defined at compile time as plain Rust enums. Derive macros generate the boilerplate for indexing and per-kind property access. A [`Graph`] is immutable.
-It's built up by applying a sequence of diffs ([`GraphDiff`]). Each diff produces a new [`Graph`], with all nodes, edges, and properties stored in flat, indexed arrays rather than a pointer-based structure.
+Node, edge, and property kinds are defined at compile time as plain Rust enums, deriving `NodeItemKind`, `EdgeItemKind`, and `PropertyItemKind` respectively. A `Schema` implementation ties them together: its associated types `N`, `E`, and `P` name the node, edge, and property kind enums it uses (and `D` names the edge direction type).
+
+`Graph<S>` and `GraphDiff<S>` are generic over a `Schema` `S`. `S` determines the flat array layout: the number of node/edge/property kinds it declares fixes the number and offsets of the storage slots, so the layout is derived from the schema rather than being pointer-based.
+
+A `Graph` is updated by applying a diff (`GraphDiff::apply`), which takes the `Graph` by value, mutates its flat storage directly (appending new nodes/edges, flipping deletion flags, overwriting updated properties), and returns it. `Graph` isn't `Clone`, so there's no way to keep the pre-update version around — Rust's ownership rules just guarantee you can never end up holding two out-of-sync copies at once.
 
 A few notable points about the model:
 
 - Each node kind declares which properties it may carry. Each property declares its type and whether it holds one value or many (`quantity = One` / `Multi`).
-- Every edge is stored as a pair of half-edges, one per endpoint. Either endpoint can look up its incident edges (`get_edges`, `get_edges_count`) without scanning the whole graph. Edges can be directed (`BiDirection::In`/`Out`) or undirected (`UndefDirection`). An edge may also carry a single property value, visible from either endpoint
+- Every edge is stored as a pair of half-edges, one per endpoint. Either endpoint can look up its incident edges (`get_edges`, `get_edges_count`) without scanning the whole graph. Edges can be directed (`BiDirection::In`/`Out`). An edge may also carry a single property value, visible from either endpoint
   via `get_edge_property`.
 - A node doesn't need to be added to the graph yet to be referenced. Other nodes and edges in the same diff can point at it, e.g. as an edge endpoint or a `NodeRef`-typed property.
-- A diff can add nodes and edges, update a node's property (`update_node_property`), or remove nodes and edges (`remove_node`, `remove_edge`). Diffs apply incrementally, on top of the [`Graph`] produced by the previous one.
+- A diff can add nodes and edges, update a node's property (`update_node_property`), or remove nodes and edges (`remove_node`, `remove_edge`). Diffs apply incrementally, on top of the `Graph` produced by the previous one.
 
 The crate is organized as a small workspace:
 
