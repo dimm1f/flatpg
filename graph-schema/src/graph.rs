@@ -2,11 +2,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     EdgeDirectionKind, ItemAsStr, ItemIndex,
-    edge::{Edge, EdgeHandle, EdgeRef},
+    edge::{Direction, Edge, EdgeHandle, EdgeRef},
     error::Error,
     node::{NewNode, Node, NodeMeta, NodeRef},
     property::PropertyValue,
-    schema::{Direction, EdgeKind, EdgeStorageSlot, NodeKind, PropKind, Schema},
+    schema::{EdgeKind, EdgeStorageSlot, NodeKind, PropKind, Schema},
     storage::{EdgeStorage, NodeMetaStorage, PropertyStorage, StorageArray, StoredProperty},
     strings_pool::{StringRef, StringsPool},
 };
@@ -163,7 +163,7 @@ impl<S: Schema> Graph<S> {
         &self,
         node_ref: NodeRef,
         edge_kind: EdgeKind<S>,
-        direction: Direction<S>,
+        direction: Direction,
     ) -> Result<usize, Error> {
         let kind = S::resolve_node_kind(node_ref)?;
         let slot = S::edge_storage_slot(kind, direction, edge_kind);
@@ -183,7 +183,7 @@ impl<S: Schema> Graph<S> {
         &self,
         src_node: Node<S>,
         edge_kind: EdgeKind<S>,
-        direction: Direction<S>,
+        direction: Direction,
     ) -> Result<Vec<Edge<S>>, Error> {
         let slot = S::edge_storage_slot(src_node.kind(), direction, edge_kind);
         let (start, end) = self.get_edges_offset((&src_node).into(), slot)?;
@@ -246,7 +246,7 @@ type NewEdgeId = usize;
 struct HalfEdge<S: Schema> {
     node: Node<S>,
     neighbor: Node<S>,
-    direction: Direction<S>,
+    direction: Direction,
     edge_kind: EdgeKind<S>,
     property: Option<StoredProperty>,
 }
@@ -658,7 +658,7 @@ fn node_is_deleted<S: Schema>(nodes: &NodeMetaStorage<S>, node_ref: Node<S>) -> 
 fn remove_half_edge<S>(
     graph: &mut Graph<S>,
     node_ref: NodeRef,
-    direction: Direction<S>,
+    direction: Direction,
     edge_kind: EdgeKind<S>,
     local_seq: usize,
 ) -> Result<(), Error>
@@ -696,7 +696,7 @@ where
 fn find_reverse_edge_seq<S>(
     graph: &Graph<S>,
     node: NodeRef,
-    direction: Direction<S>,
+    direction: Direction,
     edge_kind: EdgeKind<S>,
     target: NodeRef,
 ) -> Result<usize, Error>
@@ -751,7 +751,7 @@ where
         edge_kind: new_edge.kind,
         node: src_node.try_into().ok()?,
         neighbor: dst_node.try_into().ok()?,
-        direction: Direction::<S>::src_half(),
+        direction: Direction::src_half(),
         property: property.clone(),
     };
 
@@ -759,7 +759,7 @@ where
         edge_kind: new_edge.kind,
         node: dst_node.try_into().ok()?,
         neighbor: src_node.try_into().ok()?,
-        direction: Direction::<S>::dst_half(),
+        direction: Direction::dst_half(),
         property,
     };
 

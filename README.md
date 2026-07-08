@@ -11,7 +11,7 @@ A `Graph` is updated by applying a diff (`GraphDiff::apply`), which takes the `G
 A few notable points about the model:
 
 - Each node kind declares which properties it may carry. Each property declares its type and whether it holds one value or many (`quantity = One` / `Multi`).
-- Every edge is stored as a pair of half-edges, one per endpoint. Either endpoint can look up its incident edges (`get_edges`, `get_edges_count`) without scanning the whole graph. Edges can be directed (`BiDirection::In`/`Out`). An edge may also carry a single property value, visible from either endpoint
+- Every edge is stored as a pair of half-edges, one per endpoint. Either endpoint can look up its incident edges (`get_edges`, `get_edges_count`) without scanning the whole graph. Edges are directed (`Direction::In`/`Out`). An edge may also carry a single property value, visible from either endpoint
   via `get_edge_property`.
 - A node doesn't need to be added to the graph yet to be referenced. Other nodes and edges in the same diff can point at it, e.g. as an edge endpoint or a `NodeRef`-typed property.
 - A diff can add nodes and edges, update a node's property (`update_node_property`), or remove nodes and edges (`remove_node`, `remove_edge`). Diffs apply incrementally, on top of the `Graph` produced by the previous one.
@@ -26,7 +26,7 @@ The crate is organized as a small workspace:
 
 ```rust
 use flatpg::{graph::Graph, graph::GraphDiff, node::NodeRef, prelude::*, schema::Schema};
-use graph_schema::edge::BiDirection;
+use graph_schema::edge::Direction;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
@@ -66,7 +66,6 @@ impl Schema for SimpleSchema {
     type N = SimpleNode;
     type E = SimpleEdge;
     type P = SimpleProperty;
-    type D = BiDirection;
 }
 
 let mut diff = GraphDiff::<SimpleSchema>::default();
@@ -84,7 +83,7 @@ let graph = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
 let a = graph.nodes_by_kind(SimpleNode::A).next().expect("A node");
 assert_eq!(ANode::new(&graph, a.seq()).key().unwrap(), "hello");
 assert_eq!(
-    graph.get_edges(a, SimpleEdge::Base, BiDirection::Out).unwrap().len(),
+    graph.get_edges(a, SimpleEdge::Base, Direction::Out).unwrap().len(),
     1
 );
 ```

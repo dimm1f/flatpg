@@ -2,11 +2,11 @@ use std::fmt::Display;
 
 use crate::{
     AvailableProperties, EdgeDirectionKind, ItemAsStr, ItemIndex, ItemKindPropertyType,
-    edge::Edge,
+    edge::{Direction, Edge},
     error::Error,
     graph::Graph,
     property::{PropertyValue, QuantityType},
-    schema::{Direction, EdgeKind, NodeKind, PropKind, Schema},
+    schema::{EdgeKind, NodeKind, PropKind, Schema},
 };
 
 pub trait StoredNode<S: Schema> {
@@ -21,22 +21,22 @@ pub trait StoredNode<S: Schema> {
     }
 
     /// Returns this node's `edge_kind` edges for the source half of the
-    /// schema's direction type (`Out` for `BiDirection` schemas).
+    /// schema's direction type (`Out` for `Direction` schemas).
     fn get_edges_out(&self, edge_kind: EdgeKind<S>) -> Result<Vec<Edge<S>>, Error> {
         self.graph().get_edges(
             Node::new(self.kind(), self.seq()),
             edge_kind,
-            Direction::<S>::src_half(),
+            Direction::src_half(),
         )
     }
 
     /// Returns this node's `edge_kind` edges for the destination half of the
-    /// schema's direction type (`In` for `BiDirection` schemas).
+    /// schema's direction type (`In` for `Direction` schemas).
     fn get_edges_in(&self, edge_kind: EdgeKind<S>) -> Result<Vec<Edge<S>>, Error> {
         self.graph().get_edges(
             Node::new(self.kind(), self.seq()),
             edge_kind,
-            Direction::<S>::dst_half(),
+            Direction::dst_half(),
         )
     }
 }

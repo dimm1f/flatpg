@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::edge::{EdgeHandle, EdgeRef};
+use crate::edge::{Direction, EdgeHandle, EdgeRef};
 use crate::error::Error;
 use crate::node::NodeRef;
 use crate::property::PropertyType;
@@ -95,22 +95,20 @@ impl Display for PropertyStorageSlot {
 pub type NodeKind<S> = <S as Schema>::N;
 pub type EdgeKind<S> = <S as Schema>::E;
 pub type PropKind<S> = <S as Schema>::P;
-pub type Direction<S> = <S as Schema>::D;
 
 pub trait Schema: Sized + Clone + Copy {
     type N: NodeItemKind<Self::P>;
     type E: EdgeItemKind;
     type P: PropertyItemKind;
-    type D: EdgeDirectionKind;
 
     /// Builds an [`Edge`] from a source node, a neighbor node, a direction, and an edge ref.
     fn make_edge(
         src_node_ref: NodeRef,
         dst_node_ref: NodeRef,
-        direction: Self::D,
+        direction: Direction,
         edge_handle: EdgeHandle,
     ) -> EdgeRef {
-        Self::D::make_edge(src_node_ref, dst_node_ref, direction, edge_handle)
+        Direction::make_edge(src_node_ref, dst_node_ref, direction, edge_handle)
     }
 
     /// Converts a [`NodeRef`] to its typed node kind.
@@ -134,7 +132,7 @@ pub trait Schema: Sized + Clone + Copy {
     ///
     /// Reads the direction index from the ref and looks it up via [`Schema::direction_by_index`].
     /// Returns an error if the index does not map to any known direction in this schema.
-    fn resolve_edge_direction(edge_handle: EdgeHandle) -> Result<Self::D, Error> {
+    fn resolve_edge_direction(edge_handle: EdgeHandle) -> Result<Direction, Error> {
         Self::direction_by_index(edge_handle.direction())
             .ok_or_else(|| Error::unresolved_direction(edge_handle.direction()))
     }
@@ -180,8 +178,8 @@ pub trait Schema: Sized + Clone + Copy {
     }
 
     /// Returns the direction for the given index, or `None` if the index is out of range.
-    fn direction_by_index(index: usize) -> Option<Self::D> {
-        Self::D::from_index(index)
+    fn direction_by_index(index: usize) -> Option<Direction> {
+        Direction::from_index(index)
     }
 
     /// Returns the property kind for the given index, or `None` if the index is out of range.
@@ -206,7 +204,7 @@ pub trait Schema: Sized + Clone + Copy {
         Self::number_of_edge_kinds()
             * Self::number_of_node_kinds()
             * EdgeStorageSlot::size()
-            * Self::D::values().len()
+            * Direction::values().len()
     }
 
     /// Returns the storage slot for the given `(node_kind, direction, edge_kind)` combination.
@@ -215,13 +213,13 @@ pub trait Schema: Sized + Clone + Copy {
     /// middle, and node kind as the innermost, so adjacent node kinds share a cache line.
     fn edge_storage_slot(
         node_kind: Self::N,
-        direction: Self::D,
+        direction: Direction,
         edge_kind: Self::E,
     ) -> EdgeStorageSlot {
         EdgeStorageSlot::new(
             node_kind.index()
                 + Self::number_of_node_kinds()
-                    * (direction.factor() + Self::D::values().len() * edge_kind.index()),
+                    * (direction.factor() + Direction::values().len() * edge_kind.index()),
         )
     }
 
@@ -229,9 +227,9 @@ pub trait Schema: Sized + Clone + Copy {
     ///
     /// The order matches the layout used by [`Schema::edge_storage_slot`]: edge kind outermost,
     /// direction in the middle, node kind innermost. Each item corresponds to one [`EdgeStorageSlot`].
-    fn edge_storage_slots_iter() -> impl Iterator<Item = (Self::N, Self::D, Self::E)> {
+    fn edge_storage_slots_iter() -> impl Iterator<Item = (Self::N, Direction, Self::E)> {
         Self::edge_kinds().iter().flat_map(|&edge_kind| {
-            Self::D::values().iter().flat_map(move |&direction| {
+            Direction::values().iter().flat_map(move |&direction| {
                 Self::node_kinds()
                     .iter()
                     .map(move |&node_kind| (node_kind, direction, edge_kind))

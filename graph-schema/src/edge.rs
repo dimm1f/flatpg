@@ -2,7 +2,7 @@ use crate::{
     EdgeDirectionKind, ItemAsStr, ItemFromIndex, ItemIndex,
     error::Error,
     node::{Node, NodeRef},
-    schema::{Direction, EdgeKind, Schema},
+    schema::{EdgeKind, Schema},
 };
 
 /// Direction of a half-edge, for schemas whose edges have a meaningful
@@ -10,20 +10,20 @@ use crate::{
 ///
 /// Every edge is stored as two halves, one on each endpoint, so that either
 /// node can look up its incident edges without scanning the whole graph.
-/// `BiDirection` labels which half a given half-edge is. Use this as a
+/// `Direction` labels which half a given half-edge is. Use this as a
 /// schema's [`Schema::D`](crate::schema::Schema::D) type when edges have a
 /// direction (e.g. "follows", "parent of").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BiDirection {
+pub enum Direction {
     /// The half stored on the edge's destination node, pointing back at the source.
     In,
     /// The half stored on the edge's source node, pointing at the destination.
     Out,
 }
 
-impl EdgeDirectionKind for BiDirection {
-    fn values() -> &'static [BiDirection] {
-        const ARRAY: [BiDirection; 2] = [BiDirection::In, BiDirection::Out];
+impl EdgeDirectionKind for Direction {
+    fn values() -> &'static [Direction] {
+        const ARRAY: [Direction; 2] = [Direction::In, Direction::Out];
         &ARRAY
     }
 
@@ -36,12 +36,12 @@ impl EdgeDirectionKind for BiDirection {
 
     fn make_edge(src: NodeRef, dst: NodeRef, direction: Self, handle: EdgeHandle) -> EdgeRef {
         match direction {
-            BiDirection::In => EdgeRef {
+            Direction::In => EdgeRef {
                 src_node_ref: dst,
                 dst_node_ref: src,
                 handle,
             },
-            BiDirection::Out => EdgeRef {
+            Direction::Out => EdgeRef {
                 src_node_ref: src,
                 dst_node_ref: dst,
                 handle,
@@ -65,7 +65,7 @@ impl EdgeDirectionKind for BiDirection {
     }
 }
 
-impl ItemFromIndex for BiDirection {
+impl ItemFromIndex for Direction {
     fn from_index(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::In),
@@ -75,11 +75,11 @@ impl ItemFromIndex for BiDirection {
     }
 }
 
-impl ItemAsStr for BiDirection {
+impl ItemAsStr for Direction {
     fn as_str(&self) -> &'static str {
         match self {
-            BiDirection::In => "In",
-            BiDirection::Out => "Out",
+            Direction::In => "In",
+            Direction::Out => "Out",
         }
     }
 }
@@ -168,7 +168,7 @@ pub struct Edge<S: Schema> {
     src_node: Node<S>,
     dst_node: Node<S>,
     kind: EdgeKind<S>,
-    direction: Direction<S>,
+    direction: Direction,
     seq: usize,
 }
 
@@ -177,7 +177,7 @@ impl<S: Schema> Edge<S> {
         src_node: Node<S>,
         dst_node: Node<S>,
         kind: EdgeKind<S>,
-        direction: Direction<S>,
+        direction: Direction,
         seq: usize,
     ) -> Self {
         Self {
@@ -201,7 +201,7 @@ impl<S: Schema> Edge<S> {
         self.kind
     }
 
-    pub fn direction(&self) -> Direction<S> {
+    pub fn direction(&self) -> Direction {
         self.direction
     }
 

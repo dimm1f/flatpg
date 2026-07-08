@@ -6,7 +6,7 @@ use flatpg::{
     property::PropertyValue,
     schema::Schema,
 };
-use graph_schema::edge::BiDirection;
+use graph_schema::edge::Direction;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum TestProperty {
@@ -42,7 +42,6 @@ impl Schema for TestSchema {
     type N = TestNode;
     type E = TestEdge;
     type P = TestProperty;
-    type D = BiDirection;
 }
 
 fn string_value(prop: PropertyValue) -> String {
@@ -69,7 +68,7 @@ fn edge_property_is_visible_from_both_endpoints() {
     let b = graph.nodes_by_kind(TestNode::B).next().expect("B node");
 
     let mut out_edges = graph
-        .get_edges(a, TestEdge::Labeled, BiDirection::Out)
+        .get_edges(a, TestEdge::Labeled, Direction::Out)
         .expect("out edges");
     assert_eq!(out_edges.len(), 1);
     let out_prop = graph
@@ -79,7 +78,7 @@ fn edge_property_is_visible_from_both_endpoints() {
     assert_eq!(string_value(out_prop), "p0");
 
     let mut in_edges = graph
-        .get_edges(b, TestEdge::Labeled, BiDirection::In)
+        .get_edges(b, TestEdge::Labeled, Direction::In)
         .expect("in edges");
     assert_eq!(in_edges.len(), 1);
     let in_prop = graph
@@ -111,7 +110,7 @@ fn in_edge_properties_match_their_edges() {
 
     let b = graph.nodes_by_kind(TestNode::B).next().expect("B node");
     let in_edges = graph
-        .get_edges(b, TestEdge::Labeled, BiDirection::In)
+        .get_edges(b, TestEdge::Labeled, Direction::In)
         .expect("in edges");
     assert_eq!(in_edges.len(), 2);
 
@@ -360,13 +359,13 @@ fn add_edge_between_new_nodes() {
     let b = graph.nodes_by_kind(TestNode::B).next().expect("B node");
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, BiDirection::Out)
+            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, Direction::Out)
             .expect("out edges count"),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b), TestEdge::Plain, Direction::In)
             .expect("in edges count"),
         1
     );
@@ -385,7 +384,7 @@ fn add_edge_endpoints_are_correct() {
     let b = graph.nodes_by_kind(TestNode::B).next().expect("B node");
 
     let out_edges = graph
-        .get_edges(a, TestEdge::Plain, BiDirection::Out)
+        .get_edges(a, TestEdge::Plain, Direction::Out)
         .expect("out edges");
     assert_eq!(out_edges.len(), 1);
     assert_eq!(out_edges[0].src_node().kind(), TestNode::A);
@@ -408,7 +407,7 @@ fn add_multiple_edges_same_kind() {
     let a = graph.nodes_by_kind(TestNode::A).next().expect("A node");
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, BiDirection::Out)
+            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, Direction::Out)
             .expect("out edges count"),
         2
     );
@@ -430,13 +429,13 @@ fn add_edge_between_existing_nodes() {
 
     assert_eq!(
         graph
-            .get_edges_count(a_ref, TestEdge::Plain, BiDirection::Out)
+            .get_edges_count(a_ref, TestEdge::Plain, Direction::Out)
             .expect("out edges count"),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(b_ref, TestEdge::Plain, BiDirection::In)
+            .get_edges_count(b_ref, TestEdge::Plain, Direction::In)
             .expect("in edges count"),
         1
     );
@@ -458,13 +457,13 @@ fn add_edge_between_new_and_existing_node() {
     let b = graph.nodes_by_kind(TestNode::B).next().expect("B node");
     assert_eq!(
         graph
-            .get_edges_count(a_ref, TestEdge::Plain, BiDirection::Out)
+            .get_edges_count(a_ref, TestEdge::Plain, Direction::Out)
             .expect("out edges count"),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b), TestEdge::Plain, Direction::In)
             .expect("in edges count"),
         1
     );
@@ -486,7 +485,7 @@ fn add_edge_with_property_stores_property() {
 
     let a = graph.nodes_by_kind(TestNode::A).next().expect("A node");
     let edges = graph
-        .get_edges(a, TestEdge::Labeled, BiDirection::Out)
+        .get_edges(a, TestEdge::Labeled, Direction::Out)
         .expect("out edges");
     assert_eq!(edges.len(), 1);
 
@@ -592,7 +591,7 @@ fn setup_graph_with_fan_out_edges() -> (Graph<TestSchema>, Node<TestSchema>, Vec
 
 fn out_edge_dst_seqs(graph: &Graph<TestSchema>, a: Node<TestSchema>) -> Vec<usize> {
     graph
-        .get_edges(a, TestEdge::Plain, BiDirection::Out)
+        .get_edges(a, TestEdge::Plain, Direction::Out)
         .expect("out edges")
         .iter()
         .map(|e| e.dst_node().seq())
@@ -605,7 +604,7 @@ fn remove_first_of_many_out_edges_preserves_others() {
     let (b0, b1, b2) = (bs[0], bs[1], bs[2]);
 
     let edge_to_b0 = graph
-        .get_edges(a, TestEdge::Plain, BiDirection::Out)
+        .get_edges(a, TestEdge::Plain, Direction::Out)
         .expect("out edges")
         .into_iter()
         .find(|e| e.dst_node().seq() == b0.seq())
@@ -623,19 +622,19 @@ fn remove_first_of_many_out_edges_preserves_others() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b0), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b0), TestEdge::Plain, Direction::In)
             .unwrap(),
         0
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b1), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b1), TestEdge::Plain, Direction::In)
             .unwrap(),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b2), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b2), TestEdge::Plain, Direction::In)
             .unwrap(),
         1
     );
@@ -647,7 +646,7 @@ fn remove_middle_of_many_out_edges_preserves_others() {
     let (b0, b1, b2) = (bs[0], bs[1], bs[2]);
 
     let edge_to_b1 = graph
-        .get_edges(a, TestEdge::Plain, BiDirection::Out)
+        .get_edges(a, TestEdge::Plain, Direction::Out)
         .expect("out edges")
         .into_iter()
         .find(|e| e.dst_node().seq() == b1.seq())
@@ -665,7 +664,7 @@ fn remove_middle_of_many_out_edges_preserves_others() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b1), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b1), TestEdge::Plain, Direction::In)
             .unwrap(),
         0
     );
@@ -677,7 +676,7 @@ fn remove_last_of_many_out_edges_preserves_others() {
     let (b0, b1, b2) = (bs[0], bs[1], bs[2]);
 
     let edge_to_b2 = graph
-        .get_edges(a, TestEdge::Plain, BiDirection::Out)
+        .get_edges(a, TestEdge::Plain, Direction::Out)
         .expect("out edges")
         .into_iter()
         .find(|e| e.dst_node().seq() == b2.seq())
@@ -695,7 +694,7 @@ fn remove_last_of_many_out_edges_preserves_others() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b2), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b2), TestEdge::Plain, Direction::In)
             .unwrap(),
         0
     );
@@ -835,14 +834,14 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
     let b = graph.nodes_by_kind(TestNode::B).next().expect("B node");
 
     let edges = graph
-        .get_edges(a, TestEdge::Plain, BiDirection::Out)
+        .get_edges(a, TestEdge::Plain, Direction::Out)
         .expect("out edges");
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.remove_edge(edges.into_iter().next().unwrap());
     let graph = diff2.apply(graph).expect("apply diff 2");
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, BiDirection::Out)
+            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, Direction::Out)
             .unwrap(),
         0
     );
@@ -853,13 +852,13 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, BiDirection::Out)
+            .get_edges_count(NodeRef::from(&a), TestEdge::Plain, Direction::Out)
             .unwrap(),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&b), TestEdge::Plain, BiDirection::In)
+            .get_edges_count(NodeRef::from(&b), TestEdge::Plain, Direction::In)
             .unwrap(),
         1
     );

@@ -5,7 +5,7 @@ use flatpg::{
     property::PropertyValue,
     schema::Schema,
 };
-use graph_schema::edge::BiDirection;
+use graph_schema::edge::Direction;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
@@ -45,7 +45,6 @@ impl Schema for SimpleSchema {
     type N = SimpleNode;
     type E = SimpleEdge;
     type P = SimpleProperty;
-    type D = BiDirection;
 }
 
 fn main() {
@@ -107,14 +106,14 @@ fn main() {
     assert_eq!(c.r#ref().unwrap().seq(), a_node.seq());
 
     let a_out_edges = graph
-        .get_edges(a_node, SimpleEdge::Base, BiDirection::Out)
+        .get_edges(a_node, SimpleEdge::Base, Direction::Out)
         .expect("a's outgoing Base edges");
     assert_eq!(a_out_edges.len(), 1);
     assert_eq!(a_out_edges[0].dst_node().kind(), SimpleNode::B);
     assert_eq!(a_out_edges[0].dst_node().seq(), b_node.seq());
 
     let a_in_edges = graph
-        .get_edges(a_node, SimpleEdge::Extended, BiDirection::In)
+        .get_edges(a_node, SimpleEdge::Extended, Direction::In)
         .expect("a's incoming Extended edges");
     assert_eq!(a_in_edges.len(), 1);
     assert_eq!(a_in_edges[0].src_node().kind(), SimpleNode::C);
