@@ -101,7 +101,7 @@ pub trait Schema: Sized + Clone + Copy {
     type E: EdgeItemKind;
     type P: PropertyItemKind;
 
-    /// Builds an [`Edge`] from a source node, a neighbor node, a direction, and an edge ref.
+    /// Builds an [`EdgeRef`] from a source node, a destination node, a direction, and an edge handle.
     fn make_edge(
         src_node_ref: NodeRef,
         dst_node_ref: NodeRef,

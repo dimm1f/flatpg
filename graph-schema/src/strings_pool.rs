@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-/// A cheap, `Copy` handle to a string interned in a [`StringsPool`].
+/// A cheap, `Copy` handle to a string interned in the graph's string pool.
 ///
 /// Backed by an index rather than a byte range so resolving it is a single
 /// `Vec` indirection, and existing handles stay valid even as the pool grows.
