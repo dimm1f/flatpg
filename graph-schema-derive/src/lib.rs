@@ -1,5 +1,6 @@
 extern crate proc_macro;
 
+mod edge_structs_derives;
 mod enum_derives;
 mod node_structs_derives;
 mod property_trait_derives;
@@ -75,10 +76,15 @@ pub fn node_kind_derive(input: TokenStream) -> TokenStream {
     .into()
 }
 
-#[proc_macro_derive(EdgeItemKind, attributes(property_kind, property))]
+#[proc_macro_derive(EdgeItemKind, attributes(edge_kind, property))]
 pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemEnum);
     let name = &input.ident;
+
+    let config = match edge_structs_derives::parse_edge_kind_config(&input) {
+        Ok(c) => c,
+        Err(e) => return e.into_compile_error().into(),
+    };
 
     let enum_item_all = enum_derives::enum_item_all_derive(&input);
     let enum_item_from_index = enum_derives::enum_item_from_index_derive(&input);
@@ -86,6 +92,8 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
     let enum_item_as_str = enum_derives::enum_item_as_str_derive(&input);
     let enum_item_from_str = enum_derives::enum_item_from_str_derive(&input);
     let enum_item_property_type = enum_derives::item_kind_property_type_derive(&input, false);
+    let edge_structs = edge_structs_derives::edge_structs_derive(&input, &config)
+        .unwrap_or_else(Error::into_compile_error);
 
     quote! {
         #enum_item_all
@@ -94,6 +102,7 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
         #enum_item_as_str
         #enum_item_from_str
         #enum_item_property_type
+        #edge_structs
 
         impl EdgeItemKind for #name {}
     }

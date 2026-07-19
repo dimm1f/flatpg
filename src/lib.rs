@@ -20,4 +20,4 @@ pub mod prelude {
     };
 }
 
-pub use graph_schema::{error, graph, node, property, schema, storage};
+pub use graph_schema::{edge, error, graph, node, property, schema, storage};

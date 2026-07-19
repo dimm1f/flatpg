@@ -1,11 +1,12 @@
 use flatpg::{
+    edge::{Direction, StoredEdge},
+    error::Error,
     graph::{Graph, GraphDiff},
-    node::NodeRef,
+    node::{Node, NodeRef},
     prelude::*,
     property::PropertyValue,
     schema::Schema,
 };
-use graph_schema::edge::Direction;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
@@ -31,6 +32,7 @@ enum SimpleNode {
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+#[edge_kind(schema = SimpleSchema)]
 enum SimpleEdge {
     #[property(typ = None)]
     Base,
@@ -45,6 +47,51 @@ impl Schema for SimpleSchema {
     type N = SimpleNode;
     type E = SimpleEdge;
     type P = SimpleProperty;
+}
+
+struct SimpleGraph<'a>(&'a Graph<SimpleSchema>);
+
+impl<'a> SimpleGraph<'a> {
+    fn new(graph: &'a Graph<SimpleSchema>) -> Self {
+        Self(graph)
+    }
+
+    fn nodes_by_kind(&self, kind: SimpleNode) -> impl Iterator<Item = GNode<'a>> + 'a {
+        let graph = self.0;
+        graph
+            .nodes_by_kind(kind)
+            .map(move |node| GNode::new(graph, node.kind(), node.seq()))
+    }
+
+    fn nodes_by_kind_with_deleted(&self, kind: SimpleNode) -> impl Iterator<Item = GNode<'a>> + 'a {
+        let graph = self.0;
+        graph
+            .nodes_by_kind_with_deleted(kind)
+            .map(move |node| GNode::new(graph, node.kind(), node.seq()))
+    }
+
+    fn get_edges(
+        &self,
+        src_node: Node<SimpleSchema>,
+        edge_kind: SimpleEdge,
+        direction: Direction,
+    ) -> Result<Vec<GEdge<'a>>, Error> {
+        let graph = self.0;
+        Ok(graph
+            .get_edges(src_node, edge_kind, direction)?
+            .into_iter()
+            .map(|edge| {
+                GEdge::new(
+                    graph,
+                    edge.kind(),
+                    edge.src_node(),
+                    edge.dst_node(),
+                    edge.direction(),
+                    edge.seq(),
+                )
+            })
+            .collect())
+    }
 }
 
 fn main() {
@@ -93,32 +140,49 @@ fn main() {
 
     let graph = diff.apply(graph).expect("apply diff 2");
 
-    let c_node = graph.nodes_by_kind(SimpleNode::C).next().expect("C node");
+    let view = SimpleGraph::new(&graph);
 
-    let a = ANode::new(&graph, a_node.seq());
-    let b = BNode::new(&graph, b_node.seq());
-    let c = CNode::new(&graph, c_node.seq());
-
+    let Some(GNode::A(a)) = view.nodes_by_kind(SimpleNode::A).next() else {
+        panic!("expected GNode::A");
+    };
     assert_eq!(a.key().unwrap(), "hello");
     assert_eq!(a.values().unwrap(), vec!["v1", "v2"]);
+
+    let Some(GNode::B(b)) = view.nodes_by_kind(SimpleNode::B).next() else {
+        panic!("expected GNode::B");
+    };
     assert_eq!(b.count().unwrap(), 42);
+
+    let Some(GNode::C(c)) = view.nodes_by_kind(SimpleNode::C).next() else {
+        panic!("expected GNode::C");
+    };
     assert_eq!(c.r#ref().unwrap().kind(), SimpleNode::A);
     assert_eq!(c.r#ref().unwrap().seq(), a_node.seq());
 
-    let a_out_edges = graph
-        .get_edges(a_node, SimpleEdge::Base, Direction::Out)
-        .expect("a's outgoing Base edges");
-    assert_eq!(a_out_edges.len(), 1);
-    assert_eq!(a_out_edges[0].dst_node().kind(), SimpleNode::B);
-    assert_eq!(a_out_edges[0].dst_node().seq(), b_node.seq());
+    assert_eq!(view.nodes_by_kind_with_deleted(SimpleNode::A).count(), 1);
 
-    let a_in_edges = graph
+    let base_edges = view
+        .get_edges(a_node, SimpleEdge::Base, Direction::Out)
+        .expect("a's outgoing Base GEdges");
+    let [GEdge::Base(base)] = base_edges.as_slice() else {
+        panic!("expected exactly one GEdge::Base");
+    };
+    assert_eq!(base.kind(), SimpleEdge::Base);
+    assert_eq!(base.src_node().kind(), SimpleNode::A);
+    assert_eq!(base.src_node().seq(), a_node.seq());
+    assert_eq!(base.dst_node().kind(), SimpleNode::B);
+    assert_eq!(base.dst_node().seq(), b_node.seq());
+    assert_eq!(base.direction(), Direction::Out);
+
+    let extended_edges = view
         .get_edges(a_node, SimpleEdge::Extended, Direction::In)
-        .expect("a's incoming Extended edges");
-    assert_eq!(a_in_edges.len(), 1);
-    assert_eq!(a_in_edges[0].src_node().kind(), SimpleNode::C);
+        .expect("a's incoming Extended GEdges");
+    let [GEdge::Extended(extended)] = extended_edges.as_slice() else {
+        panic!("expected exactly one GEdge::Extended");
+    };
+    assert_eq!(extended.src_node().kind(), SimpleNode::C);
     let edge_property = graph
-        .get_edge_property(a_in_edges.into_iter().next().unwrap())
+        .get_edge_property(extended.edge())
         .expect("edge property lookup")
         .expect("Extended edges carry a property");
     match edge_property {

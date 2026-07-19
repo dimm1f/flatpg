@@ -1,9 +1,28 @@
 use crate::{
     EdgeDirectionKind, ItemAsStr, ItemFromIndex, ItemIndex,
     error::Error,
+    graph::Graph,
     node::{Node, NodeRef},
     schema::{EdgeKind, Schema},
 };
+
+pub trait StoredEdge<S: Schema> {
+    fn graph(&self) -> &Graph<S>;
+    fn kind(&self) -> EdgeKind<S>;
+    fn src_node(&self) -> Node<S>;
+    fn dst_node(&self) -> Node<S>;
+    fn direction(&self) -> Direction;
+    fn seq(&self) -> usize;
+    fn edge(&self) -> Edge<S> {
+        Edge::new(
+            self.src_node(),
+            self.dst_node(),
+            self.kind(),
+            self.direction(),
+            self.seq(),
+        )
+    }
+}
 
 /// Direction of a half-edge.
 ///

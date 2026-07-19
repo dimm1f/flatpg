@@ -46,9 +46,6 @@ pub fn parse_node_kind_config(input: &ItemEnum) -> Result<NodeKindConfig, Error>
     })
 }
 
-// TODO: There are several types used in the macro are not fully qualified,
-// which makes it difficult to reuse.
-
 fn node_struct_name(name: &Ident) -> Ident {
     format_ident!("{}Node", name)
 }
@@ -57,7 +54,11 @@ fn node_builder_name(name: &Ident) -> Ident {
     format_ident!("{}Builder", name)
 }
 
-fn expand_structs(name: &Ident, vars: &[(&Ident, Ident)], config: &NodeKindConfig) -> TokenStream {
+fn expand_node_structs(
+    name: &Ident,
+    vars: &[(&Ident, Ident)],
+    config: &NodeKindConfig,
+) -> TokenStream {
     let schema_ty = &config.schema;
     let structs = vars.iter().map(|(v, struct_name)| {
         quote! {
@@ -107,7 +108,7 @@ pub fn node_structs_derive(
         .map(|Variant { ident: variant, .. }| (variant, node_struct_name(variant)))
         .collect::<Vec<_>>();
 
-    let structs = expand_structs(ident, &variants, config);
+    let structs = expand_node_structs(ident, &variants, config);
 
     let builders_def = variants.iter().map(|(v, struct_name)| {
         let builder_name = node_builder_name(struct_name);

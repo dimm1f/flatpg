@@ -1,4 +1,5 @@
 use flatpg::{
+    edge::{Direction, StoredEdge},
     error::Error,
     graph::{Graph, GraphDiff, QuantifiedProperty},
     node::{Node, NodeRef, StoredNode},
@@ -6,7 +7,6 @@ use flatpg::{
     property::PropertyValue,
     schema::Schema,
 };
-use graph_schema::edge::Direction;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum TestProperty {
@@ -28,6 +28,7 @@ enum TestNode {
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+#[edge_kind(schema = TestSchema)]
 enum TestEdge {
     #[property(typ = None)]
     Plain,
@@ -86,6 +87,60 @@ fn edge_property_is_visible_from_both_endpoints() {
         .expect("edge property lookup")
         .expect("property from In perspective");
     assert_eq!(string_value(in_prop), "p0");
+}
+
+#[test]
+fn stored_edge_struct_and_gedge_match_graph_get_edges() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let a = diff.add_node(builders::ANodeBuilder::new().build());
+    let b = diff.add_node(builders::BNodeBuilder::new().build());
+    diff.add_edge(
+        a,
+        b,
+        TestEdge::Labeled,
+        Some(PropertyValue::String("p0".into())),
+    );
+    let graph = diff.apply(Graph::new()).expect("apply diff");
+
+    let a = graph.nodes_by_kind(TestNode::A).next().expect("A node");
+    let edge = graph
+        .get_edges(a, TestEdge::Labeled, Direction::Out)
+        .expect("out edges")
+        .into_iter()
+        .next()
+        .expect("one edge");
+
+    let labeled_edge = LabeledEdge::new(
+        &graph,
+        edge.src_node(),
+        edge.dst_node(),
+        edge.direction(),
+        edge.seq(),
+    );
+    assert_eq!(labeled_edge.kind(), edge.kind());
+    assert_eq!(labeled_edge.src_node().kind(), edge.src_node().kind());
+    assert_eq!(labeled_edge.src_node().seq(), edge.src_node().seq());
+    assert_eq!(labeled_edge.dst_node().kind(), edge.dst_node().kind());
+    assert_eq!(labeled_edge.dst_node().seq(), edge.dst_node().seq());
+    assert_eq!(labeled_edge.direction(), edge.direction());
+    assert_eq!(labeled_edge.seq(), edge.seq());
+
+    let prop = graph
+        .get_edge_property(labeled_edge.edge())
+        .expect("edge property lookup")
+        .expect("Labeled edges carry a property");
+    assert_eq!(string_value(prop), "p0");
+
+    let gedge = GEdge::new(
+        &graph,
+        TestEdge::Labeled,
+        edge.src_node(),
+        edge.dst_node(),
+        edge.direction(),
+        edge.seq(),
+    );
+    assert!(matches!(gedge, GEdge::Labeled(_)));
+    assert_eq!(gedge.kind(), edge.kind());
 }
 
 #[test]
