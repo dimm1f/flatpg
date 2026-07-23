@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     EdgeDirectionKind, ItemAsStr, ItemIndex,
-    edge::{Direction, Edge, EdgeHandle, EdgeRef},
+    edge::{Direction, EdgeHandle, EdgeId, EdgeRef},
     error::Error,
-    node::{NewNode, Node, NodeMeta, NodeRef},
+    node::{NewNode, NodeId, NodeMeta, NodeRef},
     property::PropertyValue,
     schema::{EdgeKind, EdgeStorageSlot, NodeKind, PropKind, Schema},
     storage::{EdgeStorage, NodeMetaStorage, PropertyStorage, StorageArray, StoredProperty},
@@ -66,26 +66,26 @@ impl<S: Schema> Graph<S> {
             .sum()
     }
 
-    pub fn nodes_by_kind(&self, node_kind: NodeKind<S>) -> impl Iterator<Item = Node<S>> {
+    pub fn nodes_by_kind(&self, node_kind: NodeKind<S>) -> impl Iterator<Item = NodeId<S>> {
         self.node_meta_storage[node_kind.index()]
             .iter()
             .enumerate()
             .filter(|(_, meta)| !meta.is_deleted())
-            .map(move |(seq, _)| Node::<S>::new(node_kind, seq))
+            .map(move |(seq, _)| NodeId::<S>::new(node_kind, seq))
     }
 
-    pub fn is_node_deleted(&self, node_ref: Node<S>) -> bool {
+    pub fn is_node_deleted(&self, node_ref: NodeId<S>) -> bool {
         node_is_deleted::<S>(&self.node_meta_storage, node_ref)
     }
 
     pub fn nodes_by_kind_with_deleted(
         &self,
         node_kind: NodeKind<S>,
-    ) -> impl Iterator<Item = Node<S>> {
+    ) -> impl Iterator<Item = NodeId<S>> {
         self.node_meta_storage[node_kind.index()]
             .iter()
             .enumerate()
-            .map(move |(seq, _)| Node::<S>::new(node_kind, seq))
+            .map(move |(seq, _)| NodeId::<S>::new(node_kind, seq))
     }
     // TODO: this and node_count_by_kind need refactoring
     pub fn node_count_by_kind_with_deleted(&self, node_kind: NodeKind<S>) -> usize {
@@ -169,10 +169,10 @@ impl<S: Schema> Graph<S> {
 
     pub fn get_edges(
         &self,
-        src_node: Node<S>,
+        src_node: NodeId<S>,
         edge_kind: EdgeKind<S>,
         direction: Direction,
-    ) -> Result<Vec<Edge<S>>, Error> {
+    ) -> Result<Vec<EdgeId<S>>, Error> {
         let slot = S::edge_storage_slot(src_node.kind(), direction, edge_kind);
         let (start, end) = self.get_edges_offset((&src_node).into(), slot)?;
 
@@ -204,7 +204,7 @@ impl<S: Schema> Graph<S> {
 
     /// Returns the raw property attached to `edge`, or `Ok(None)` when the edge's
     /// kind carries no property value.
-    pub fn get_edge_property(&self, edge: Edge<S>) -> Result<Option<StoredProperty>, Error> {
+    pub fn get_edge_property(&self, edge: EdgeId<S>) -> Result<Option<StoredProperty>, Error> {
         // `edge.seq()` indexes the adjacency list of the node the edge was queried
         // from; for In-direction edges that node is `dst_node`, not `src_node`.
         let (node_ref, direction, _, _) = edge
@@ -231,8 +231,8 @@ impl<S: Schema> Default for Graph<S> {
 type NewEdgeId = usize;
 
 struct HalfEdge<S: Schema> {
-    node: Node<S>,
-    neighbor: Node<S>,
+    node: NodeId<S>,
+    neighbor: NodeId<S>,
     direction: Direction,
     edge_kind: EdgeKind<S>,
     property: Option<StoredProperty>,
@@ -359,8 +359,8 @@ impl<S: Schema> GraphDiff<S> {
         self.changes.len() - 1
     }
 
-    pub fn remove_edge<T: Into<Edge<S>>>(&mut self, edge: T) -> ChangeId {
-        let edge: Edge<S> = edge.into();
+    pub fn remove_edge<T: Into<EdgeId<S>>>(&mut self, edge: T) -> ChangeId {
+        let edge: EdgeId<S> = edge.into();
         self.changes.push(Change::RemoveEdge((&edge).into()));
         self.changes.len() - 1
     }
@@ -568,7 +568,7 @@ impl<S: Schema> GraphDiff<S> {
         for change in &self.changes {
             match change {
                 Change::RemoveNode(node_ref) => {
-                    let node: Node<S> = (*node_ref).try_into()?;
+                    let node: NodeId<S> = (*node_ref).try_into()?;
                     if let Some(seq) =
                         graph.node_meta_storage[node.kind().index()].get_mut(node_ref.seq())
                     {
@@ -576,7 +576,7 @@ impl<S: Schema> GraphDiff<S> {
                     }
                 }
                 Change::UpdateNodeProperty(node_ref, property_kind, quantified_property) => {
-                    let node: Node<S> = (*node_ref).try_into()?;
+                    let node: NodeId<S> = (*node_ref).try_into()?;
                     let slot = S::property_storage_slot(node.kind(), *property_kind);
 
                     let new_values: &[PropertyValue] = match quantified_property {
@@ -636,7 +636,7 @@ impl<S: Schema> GraphDiff<S> {
     }
 }
 
-fn node_is_deleted<S: Schema>(nodes: &NodeMetaStorage<S>, node_ref: Node<S>) -> bool {
+fn node_is_deleted<S: Schema>(nodes: &NodeMetaStorage<S>, node_ref: NodeId<S>) -> bool {
     S::node_kind_by_index(node_ref.kind().index())
         .and_then(|kind| {
             nodes[kind.index()]
@@ -694,7 +694,7 @@ fn find_reverse_edge_seq<S>(
 where
     S: Schema,
 {
-    let node: Node<S> = node.try_into()?;
+    let node: NodeId<S> = node.try_into()?;
     let slot = S::edge_storage_slot(node.kind(), direction, edge_kind);
 
     let offsets = graph
@@ -716,7 +716,7 @@ where
         .iter()
         .position(|&n| n == target)
         .ok_or_else(|| match target.try_into() {
-            Ok::<Node<S>, _>(target) => Error::reverse_edge_not_found(
+            Ok::<NodeId<S>, _>(target) => Error::reverse_edge_not_found(
                 target.to_string(),
                 node.to_string(),
                 direction.as_str().to_owned(),

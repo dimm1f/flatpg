@@ -2,7 +2,7 @@ use flatpg::{
     edge::{Direction, StoredEdge},
     error::Error,
     graph::{Graph, GraphDiff, QuantifiedProperty},
-    node::{Node, NodeRef, StoredNode},
+    node::{NodeId, NodeRef, StoredNode},
     prelude::*,
     property::PropertyValue,
     schema::Schema,
@@ -94,7 +94,7 @@ fn edge_property_is_visible_from_both_endpoints() {
 }
 
 #[test]
-fn stored_edge_struct_and_gedge_match_graph_get_edges() {
+fn stored_edge_struct_and_edge_enum_match_graph_get_edges() {
     let mut diff = GraphDiff::<TestSchema>::default();
     let a = diff.add_node(builders::ANodeBuilder::new().build());
     let b = diff.add_node(builders::BNodeBuilder::new().build());
@@ -107,7 +107,7 @@ fn stored_edge_struct_and_gedge_match_graph_get_edges() {
     let graph = diff.apply(Graph::new()).expect("apply diff");
 
     let a = graph.nodes_by_kind(TestNode::A).next().expect("A node");
-    let edge = graph
+    let edge_id = graph
         .get_edges(a, TestEdge::Labeled, Direction::Out)
         .expect("out edges")
         .into_iter()
@@ -116,18 +116,18 @@ fn stored_edge_struct_and_gedge_match_graph_get_edges() {
 
     let labeled_edge = LabeledEdge::new(
         &graph,
-        edge.src_node(),
-        edge.dst_node(),
-        edge.direction(),
-        edge.seq(),
+        edge_id.src_node(),
+        edge_id.dst_node(),
+        edge_id.direction(),
+        edge_id.seq(),
     );
-    assert_eq!(labeled_edge.kind(), edge.kind());
-    assert_eq!(labeled_edge.src_node().kind(), edge.src_node().kind());
-    assert_eq!(labeled_edge.src_node().seq(), edge.src_node().seq());
-    assert_eq!(labeled_edge.dst_node().kind(), edge.dst_node().kind());
-    assert_eq!(labeled_edge.dst_node().seq(), edge.dst_node().seq());
-    assert_eq!(labeled_edge.direction(), edge.direction());
-    assert_eq!(labeled_edge.seq(), edge.seq());
+    assert_eq!(labeled_edge.kind(), edge_id.kind());
+    assert_eq!(labeled_edge.src_node().kind(), edge_id.src_node().kind());
+    assert_eq!(labeled_edge.src_node().seq(), edge_id.src_node().seq());
+    assert_eq!(labeled_edge.dst_node().kind(), edge_id.dst_node().kind());
+    assert_eq!(labeled_edge.dst_node().seq(), edge_id.dst_node().seq());
+    assert_eq!(labeled_edge.direction(), edge_id.direction());
+    assert_eq!(labeled_edge.seq(), edge_id.seq());
 
     let prop = labeled_edge
         .property()
@@ -135,16 +135,16 @@ fn stored_edge_struct_and_gedge_match_graph_get_edges() {
         .expect("Labeled edges carry a property");
     assert_eq!(prop, "p0");
 
-    let gedge = GEdge::new(
+    let edge = Edge::new(
         &graph,
         TestEdge::Labeled,
-        edge.src_node(),
-        edge.dst_node(),
-        edge.direction(),
-        edge.seq(),
+        edge_id.src_node(),
+        edge_id.dst_node(),
+        edge_id.direction(),
+        edge_id.seq(),
     );
-    assert!(matches!(gedge, GEdge::Labeled(_)));
-    assert_eq!(gedge.kind(), edge.kind());
+    assert!(matches!(edge, Edge::Labeled(_)));
+    assert_eq!(edge.kind(), edge_id.kind());
 }
 
 #[test]
@@ -571,14 +571,14 @@ fn setup_three_file_nodes() -> Graph<TestSchema> {
 #[test]
 fn remove_first_of_many_nodes_preserves_others() {
     let graph = setup_three_file_nodes();
-    let nodes: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let nodes: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[0]);
     let graph = diff.apply(graph).expect("apply diff");
 
     assert_eq!(graph.node_count_by_kind(TestNode::A), 2);
-    let remaining: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let remaining: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
     assert_eq!(
         ANode::new(&graph, remaining[0].seq()).key().unwrap(),
         "b.rs"
@@ -592,14 +592,14 @@ fn remove_first_of_many_nodes_preserves_others() {
 #[test]
 fn remove_middle_of_many_nodes_preserves_others() {
     let graph = setup_three_file_nodes();
-    let nodes: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let nodes: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[1]);
     let graph = diff.apply(graph).expect("apply diff");
 
     assert_eq!(graph.node_count_by_kind(TestNode::A), 2);
-    let remaining: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let remaining: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
     assert_eq!(
         ANode::new(&graph, remaining[0].seq()).key().unwrap(),
         "a.rs"
@@ -613,14 +613,14 @@ fn remove_middle_of_many_nodes_preserves_others() {
 #[test]
 fn remove_last_of_many_nodes_preserves_others() {
     let graph = setup_three_file_nodes();
-    let nodes: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let nodes: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[2]);
     let graph = diff.apply(graph).expect("apply diff");
 
     assert_eq!(graph.node_count_by_kind(TestNode::A), 2);
-    let remaining: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let remaining: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
     assert_eq!(
         ANode::new(&graph, remaining[0].seq()).key().unwrap(),
         "a.rs"
@@ -631,8 +631,11 @@ fn remove_last_of_many_nodes_preserves_others() {
     );
 }
 
-fn setup_graph_with_fan_out_edges() -> (Graph<TestSchema>, Node<TestSchema>, Vec<Node<TestSchema>>)
-{
+fn setup_graph_with_fan_out_edges() -> (
+    Graph<TestSchema>,
+    NodeId<TestSchema>,
+    Vec<NodeId<TestSchema>>,
+) {
     let mut setup = GraphDiff::<TestSchema>::default();
     let a_id = setup.add_node(builders::ANodeBuilder::new().build());
     let b_ids: Vec<_> = (0..3)
@@ -648,7 +651,7 @@ fn setup_graph_with_fan_out_edges() -> (Graph<TestSchema>, Node<TestSchema>, Vec
     (graph, a, bs)
 }
 
-fn out_edge_dst_seqs(graph: &Graph<TestSchema>, a: Node<TestSchema>) -> Vec<usize> {
+fn out_edge_dst_seqs(graph: &Graph<TestSchema>, a: NodeId<TestSchema>) -> Vec<usize> {
     graph
         .get_edges(a, TestEdge::Plain, Direction::Out)
         .expect("out edges")
@@ -762,7 +765,7 @@ fn remove_last_of_many_out_edges_preserves_others() {
 #[test]
 fn update_first_of_many_nodes_leaves_others_unchanged() {
     let graph = setup_three_file_nodes();
-    let nodes: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let nodes: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.update_node_property(
@@ -780,7 +783,7 @@ fn update_first_of_many_nodes_leaves_others_unchanged() {
 #[test]
 fn update_middle_of_many_nodes_leaves_others_unchanged() {
     let graph = setup_three_file_nodes();
-    let nodes: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let nodes: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.update_node_property(
@@ -798,7 +801,7 @@ fn update_middle_of_many_nodes_leaves_others_unchanged() {
 #[test]
 fn update_last_of_many_nodes_leaves_others_unchanged() {
     let graph = setup_three_file_nodes();
-    let nodes: Vec<Node<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
+    let nodes: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::A).collect();
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.update_node_property(

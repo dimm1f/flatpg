@@ -77,8 +77,8 @@ fn expand_edge_structs(
             Ok(quote! {
                 pub struct #struct_name<'a> {
                     graph: &'a flatpg::graph::Graph<#schema_ty>,
-                    src_node: flatpg::node::Node<#schema_ty>,
-                    dst_node: flatpg::node::Node<#schema_ty>,
+                    src_node: flatpg::node::NodeId<#schema_ty>,
+                    dst_node: flatpg::node::NodeId<#schema_ty>,
                     direction: flatpg::edge::Direction,
                     seq: usize,
                 }
@@ -86,8 +86,8 @@ fn expand_edge_structs(
                 impl<'a> #struct_name<'a> {
                     pub fn new(
                         graph: &'a flatpg::graph::Graph<#schema_ty>,
-                        src_node: flatpg::node::Node<#schema_ty>,
-                        dst_node: flatpg::node::Node<#schema_ty>,
+                        src_node: flatpg::node::NodeId<#schema_ty>,
+                        dst_node: flatpg::node::NodeId<#schema_ty>,
                         direction: flatpg::edge::Direction,
                         seq: usize,
                     ) -> Self {
@@ -109,11 +109,11 @@ fn expand_edge_structs(
                         self.graph
                     }
                     #[inline]
-                    fn src_node(&self) -> flatpg::node::Node<#schema_ty> {
+                    fn src_node(&self) -> flatpg::node::NodeId<#schema_ty> {
                         self.src_node
                     }
                     #[inline]
-                    fn dst_node(&self) -> flatpg::node::Node<#schema_ty> {
+                    fn dst_node(&self) -> flatpg::node::NodeId<#schema_ty> {
                         self.dst_node
                     }
                     #[inline]
@@ -165,23 +165,23 @@ pub fn edge_structs_derive(
 
     let structs = expand_edge_structs(ident, &variants, config)?;
 
-    let gedge_variants = variants.iter().map(|(v, struct_name, _)| {
+    let edge_variants = variants.iter().map(|(v, struct_name, _)| {
         quote! {
             #v(#struct_name<'a>)
         }
     });
 
-    let gedge_new_variants = variants.iter().map(|(v, struct_name, _)| {
+    let edge_new_variants = variants.iter().map(|(v, struct_name, _)| {
         quote! {
             #ident::#v => Self::#v(#struct_name::new(graph, src_node, dst_node, direction, seq))
         }
     });
 
-    let match_gedge = variants
+    let match_edge = variants
         .iter()
         .map(|(v, _, _)| {
             quote! {
-                GEdge::#v(edge)
+                Edge::#v(edge)
             }
         })
         .collect::<Vec<_>>();
@@ -189,69 +189,69 @@ pub fn edge_structs_derive(
     Ok(quote! {
         #structs
 
-        pub enum GEdge<'a> {
+        pub enum Edge<'a> {
             #(
-                #gedge_variants,
+                #edge_variants,
             )*
         }
 
-        impl<'a> GEdge<'a> {
+        impl<'a> Edge<'a> {
             pub fn new(
                 graph: &'a flatpg::graph::Graph<#schema_ty>,
                 kind: #ident,
-                src_node: flatpg::node::Node<#schema_ty>,
-                dst_node: flatpg::node::Node<#schema_ty>,
+                src_node: flatpg::node::NodeId<#schema_ty>,
+                dst_node: flatpg::node::NodeId<#schema_ty>,
                 direction: flatpg::edge::Direction,
                 seq: usize,
             ) -> Self {
                 match kind {
                     #(
-                        #gedge_new_variants,
+                        #edge_new_variants,
                     )*
                 }
             }
         }
 
-        impl<'a> flatpg::edge::StoredEdge<#schema_ty> for GEdge<'a> {
+        impl<'a> flatpg::edge::StoredEdge<#schema_ty> for Edge<'a> {
             fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
                 match self {
                     #(
-                        #match_gedge => edge.graph(),
+                        #match_edge => edge.graph(),
                     )*
                 }
             }
-            fn src_node(&self) -> flatpg::node::Node<#schema_ty> {
+            fn src_node(&self) -> flatpg::node::NodeId<#schema_ty> {
                 match self {
                     #(
-                        #match_gedge => edge.src_node(),
+                        #match_edge => edge.src_node(),
                     )*
                 }
             }
-            fn dst_node(&self) -> flatpg::node::Node<#schema_ty> {
+            fn dst_node(&self) -> flatpg::node::NodeId<#schema_ty> {
                 match self {
                     #(
-                        #match_gedge => edge.dst_node(),
+                        #match_edge => edge.dst_node(),
                     )*
                 }
             }
             fn direction(&self) -> flatpg::edge::Direction {
                 match self {
                     #(
-                        #match_gedge => edge.direction(),
+                        #match_edge => edge.direction(),
                     )*
                 }
             }
             fn seq(&self) -> usize {
                 match self {
                     #(
-                        #match_gedge => edge.seq(),
+                        #match_edge => edge.seq(),
                     )*
                 }
             }
             fn kind(&self) -> #ident {
                 match self {
                     #(
-                        #match_gedge => edge.kind(),
+                        #match_edge => edge.kind(),
                     )*
                 }
             }
@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn edge_structs_derive_generates_gedge_enum_with_variant_per_input() {
+    fn edge_structs_derive_generates_edge_enum_with_variant_per_input() {
         let input = parse_enum(
             r#"enum E {
                 #[property(typ = None)] A,
@@ -367,12 +367,12 @@ mod tests {
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
 
-        let gedge = find_enum(&file, "GEdge").expect("GEdge enum not found");
-        assert_eq!(gedge.variants.len(), 3);
+        let edge_enum = find_enum(&file, "Edge").expect("Edge enum not found");
+        assert_eq!(edge_enum.variants.len(), 3);
     }
 
     #[test]
-    fn edge_structs_derive_gedge_new_and_stored_edge_impl_match_arm_counts() {
+    fn edge_structs_derive_edge_new_and_stored_edge_impl_match_arm_counts() {
         let input = parse_enum(
             r#"enum E {
                 #[property(typ = None)] A,
@@ -382,13 +382,13 @@ mod tests {
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
 
-        let gedge_impl =
-            find_inherent_impl(&file, "GEdge").expect("inherent impl for GEdge not found");
-        let new_method = find_method(gedge_impl, "new").expect("GEdge::new not found");
+        let edge_impl =
+            find_inherent_impl(&file, "Edge").expect("inherent impl for Edge not found");
+        let new_method = find_method(edge_impl, "new").expect("Edge::new not found");
         assert_eq!(match_arm_count(new_method), Some(2));
 
         let stored_edge =
-            find_impl(&file, "StoredEdge", "GEdge").expect("StoredEdge impl for GEdge not found");
+            find_impl(&file, "StoredEdge", "Edge").expect("StoredEdge impl for Edge not found");
         for method in ["graph", "src_node", "dst_node", "direction", "seq", "kind"] {
             let m = find_method(stored_edge, method)
                 .unwrap_or_else(|| panic!("missing method {method}"));
@@ -465,12 +465,12 @@ mod tests {
         let linked =
             find_method(find_inherent_impl(&file, "LinkedEdge").unwrap(), "property").unwrap();
         let linked_ret = return_type_string(&linked.sig);
-        assert!(linked_ret.contains("Node"));
+        assert!(linked_ret.contains("NodeId"));
         assert!(linked_ret.contains("MySchema"));
     }
 
     #[test]
-    fn gedge_has_no_property_method() {
+    fn edge_has_no_property_method() {
         let input = parse_enum(
             r#"enum E {
                 #[property(typ = None)] Plain,
@@ -480,12 +480,12 @@ mod tests {
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
 
-        let gedge_impl =
-            find_inherent_impl(&file, "GEdge").expect("inherent impl for GEdge not found");
-        assert!(find_method(gedge_impl, "property").is_none());
+        let edge_impl =
+            find_inherent_impl(&file, "Edge").expect("inherent impl for Edge not found");
+        assert!(find_method(edge_impl, "property").is_none());
 
         let stored_edge =
-            find_impl(&file, "StoredEdge", "GEdge").expect("StoredEdge impl for GEdge not found");
+            find_impl(&file, "StoredEdge", "Edge").expect("StoredEdge impl for Edge not found");
         assert!(find_method(stored_edge, "property").is_none());
     }
 }

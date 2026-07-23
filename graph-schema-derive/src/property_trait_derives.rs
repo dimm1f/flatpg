@@ -153,9 +153,9 @@ pub(crate) fn property_binding(
             quote!(flatpg::property::PropertyType::Double),
         ),
         TYP_NODE_REF => (
-            quote!(flatpg::node::Node<#schema_ty>),
+            quote!(flatpg::node::NodeId<#schema_ty>),
             quote!(flatpg::storage::StoredProperty::NodeRef(v)),
-            quote!(flatpg::node::Node::<#schema_ty>::try_from(v)),
+            quote!(flatpg::node::NodeId::<#schema_ty>::try_from(v)),
             quote!(flatpg::property::PropertyType::NodeRef),
         ),
         TYP_STRING => (
@@ -356,7 +356,7 @@ mod tests {
         let t = find_trait(&file, "Owner").unwrap();
         let m = find_trait_method(t, "owner").unwrap();
         let ret = return_type_string(&m.sig);
-        assert!(ret.contains("Node"));
+        assert!(ret.contains("NodeId"));
     }
 
     #[test]

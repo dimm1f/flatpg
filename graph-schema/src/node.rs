@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{
     AvailableProperties, EdgeDirectionKind, ItemAsStr, ItemIndex, ItemKindPropertyType,
-    edge::{Direction, Edge},
+    edge::{Direction, EdgeId},
     error::Error,
     graph::Graph,
     property::{PropertyValue, QuantityType},
@@ -22,9 +22,9 @@ pub trait StoredNode<S: Schema> {
 
     /// Returns this node's `edge_kind` edges for the source half of the
     /// schema's direction type (`Out` for `Direction` schemas).
-    fn get_edges_out(&self, edge_kind: EdgeKind<S>) -> Result<Vec<Edge<S>>, Error> {
+    fn get_edges_out(&self, edge_kind: EdgeKind<S>) -> Result<Vec<EdgeId<S>>, Error> {
         self.graph().get_edges(
-            Node::new(self.kind(), self.seq()),
+            NodeId::new(self.kind(), self.seq()),
             edge_kind,
             Direction::src_half(),
         )
@@ -32,9 +32,9 @@ pub trait StoredNode<S: Schema> {
 
     /// Returns this node's `edge_kind` edges for the destination half of the
     /// schema's direction type (`In` for `Direction` schemas).
-    fn get_edges_in(&self, edge_kind: EdgeKind<S>) -> Result<Vec<Edge<S>>, Error> {
+    fn get_edges_in(&self, edge_kind: EdgeKind<S>) -> Result<Vec<EdgeId<S>>, Error> {
         self.graph().get_edges(
-            Node::new(self.kind(), self.seq()),
+            NodeId::new(self.kind(), self.seq()),
             edge_kind,
             Direction::dst_half(),
         )
@@ -95,19 +95,19 @@ impl Display for NodeRef {
     }
 }
 
-impl<S: Schema> From<&Node<S>> for NodeRef {
-    fn from(value: &Node<S>) -> Self {
+impl<S: Schema> From<&NodeId<S>> for NodeRef {
+    fn from(value: &NodeId<S>) -> Self {
         Self::new(value.kind().index(), value.seq())
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Node<S: Schema> {
+pub struct NodeId<S: Schema> {
     kind: NodeKind<S>,
     seq: usize,
 }
 
-impl<S: Schema> Node<S> {
+impl<S: Schema> NodeId<S> {
     pub(crate) fn new(kind: NodeKind<S>, seq: usize) -> Self {
         Self { kind, seq }
     }
@@ -121,13 +121,13 @@ impl<S: Schema> Node<S> {
     }
 }
 
-impl<S: Schema> Display for Node<S> {
+impl<S: Schema> Display for NodeId<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Node({},{})", self.kind().as_str(), self.seq())
+        write!(f, "NodeId({},{})", self.kind().as_str(), self.seq())
     }
 }
 
-impl<S: Schema> TryFrom<NodeRef> for Node<S> {
+impl<S: Schema> TryFrom<NodeRef> for NodeId<S> {
     type Error = Error;
 
     fn try_from(value: NodeRef) -> Result<Self, Self::Error> {

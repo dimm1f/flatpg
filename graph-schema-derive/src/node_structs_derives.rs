@@ -114,23 +114,23 @@ pub fn node_structs_derive(
         }
     });
 
-    let gnode_variants = variants.iter().map(|(v, struct_name)| {
+    let node_variants = variants.iter().map(|(v, struct_name)| {
         quote! {
             #v(#struct_name<'a>)
         }
     });
 
-    let gnode_new_variants = variants.iter().map(|(v, struct_name)| {
+    let node_new_variants = variants.iter().map(|(v, struct_name)| {
         quote! {
             #ident::#v => Self::#v(#struct_name::new(graph, seq))
         }
     });
 
-    let match_gnode = variants
+    let match_node = variants
         .iter()
         .map(|(v, _)| {
             quote! {
-                GNode::#v(node)
+                Node::#v(node)
             }
         })
         .collect::<Vec<_>>();
@@ -145,42 +145,42 @@ pub fn node_structs_derive(
 
         #structs
 
-        pub enum GNode<'a> {
+        pub enum Node<'a> {
             #(
-                #gnode_variants,
+                #node_variants,
             )*
         }
 
-        impl<'a> GNode<'a> {
+        impl<'a> Node<'a> {
             pub fn new(graph: &'a flatpg::graph::Graph<#schema_ty>, kind: #ident, seq: usize) -> Self {
                 match kind {
                     #(
-                        #gnode_new_variants,
+                        #node_new_variants,
                     )*
                 }
             }
         }
 
-        impl<'a> flatpg::node::StoredNode<#schema_ty> for GNode<'a> {
+        impl<'a> flatpg::node::StoredNode<#schema_ty> for Node<'a> {
 
             fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
                 match self {
                     #(
-                        #match_gnode => node.graph(),
+                        #match_node => node.graph(),
                     )*
                 }
             }
             fn seq(&self) -> usize {
                 match self {
                     #(
-                        #match_gnode => node.seq(),
+                        #match_node => node.seq(),
                     )*
                 }
             }
             fn kind(&self) -> #ident {
                 match self {
                     #(
-                        #match_gnode => node.kind(),
+                        #match_node => node.kind(),
                     )*
                 }
             }

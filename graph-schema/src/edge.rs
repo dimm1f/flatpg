@@ -2,19 +2,19 @@ use crate::{
     EdgeDirectionKind, ItemAsStr, ItemFromIndex, ItemIndex,
     error::Error,
     graph::Graph,
-    node::{Node, NodeRef},
+    node::{NodeId, NodeRef},
     schema::{EdgeKind, Schema},
 };
 
 pub trait StoredEdge<S: Schema> {
     fn graph(&self) -> &Graph<S>;
     fn kind(&self) -> EdgeKind<S>;
-    fn src_node(&self) -> Node<S>;
-    fn dst_node(&self) -> Node<S>;
+    fn src_node(&self) -> NodeId<S>;
+    fn dst_node(&self) -> NodeId<S>;
     fn direction(&self) -> Direction;
     fn seq(&self) -> usize;
-    fn edge(&self) -> Edge<S> {
-        Edge::new(
+    fn edge(&self) -> EdgeId<S> {
+        EdgeId::new(
             self.src_node(),
             self.dst_node(),
             self.kind(),
@@ -132,8 +132,8 @@ impl EdgeHandle {
     }
 }
 
-impl<S: Schema> From<&Edge<S>> for EdgeHandle {
-    fn from(value: &Edge<S>) -> Self {
+impl<S: Schema> From<&EdgeId<S>> for EdgeHandle {
+    fn from(value: &EdgeId<S>) -> Self {
         Self::new(
             value.kind().index(),
             value.direction().factor(),
@@ -169,8 +169,8 @@ impl EdgeRef {
     }
 }
 
-impl<S: Schema> From<&Edge<S>> for EdgeRef {
-    fn from(value: &Edge<S>) -> Self {
+impl<S: Schema> From<&EdgeId<S>> for EdgeRef {
+    fn from(value: &EdgeId<S>) -> Self {
         let handle = EdgeHandle::from(value);
         Self::new(
             (&value.src_node()).into(),
@@ -180,18 +180,18 @@ impl<S: Schema> From<&Edge<S>> for EdgeRef {
     }
 }
 
-pub struct Edge<S: Schema> {
-    src_node: Node<S>,
-    dst_node: Node<S>,
+pub struct EdgeId<S: Schema> {
+    src_node: NodeId<S>,
+    dst_node: NodeId<S>,
     kind: EdgeKind<S>,
     direction: Direction,
     seq: usize,
 }
 
-impl<S: Schema> Edge<S> {
+impl<S: Schema> EdgeId<S> {
     pub(crate) fn new(
-        src_node: Node<S>,
-        dst_node: Node<S>,
+        src_node: NodeId<S>,
+        dst_node: NodeId<S>,
         kind: EdgeKind<S>,
         direction: Direction,
         seq: usize,
@@ -205,11 +205,11 @@ impl<S: Schema> Edge<S> {
         }
     }
 
-    pub fn src_node(&self) -> Node<S> {
+    pub fn src_node(&self) -> NodeId<S> {
         self.src_node
     }
 
-    pub fn dst_node(&self) -> Node<S> {
+    pub fn dst_node(&self) -> NodeId<S> {
         self.dst_node
     }
 
@@ -226,7 +226,7 @@ impl<S: Schema> Edge<S> {
     }
 }
 
-impl<S: Schema> TryFrom<EdgeRef> for Edge<S> {
+impl<S: Schema> TryFrom<EdgeRef> for EdgeId<S> {
     type Error = Error;
 
     fn try_from(value: EdgeRef) -> Result<Self, Self::Error> {
