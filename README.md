@@ -13,7 +13,7 @@ A `Graph` is updated by applying a diff (`GraphDiff::apply`), which takes the `G
 A few notable points about the model:
 
 - Each node kind declares which properties it may carry. Each property declares its type and whether it holds one value or many (`quantity = One` / `quantity = Multi`).
-- Every edge is stored as a pair of half-edges, one per endpoint. Either endpoint can look up its incident edges (`get_edges`, `get_edges_count`) without scanning the whole graph. Edges are directed (`Direction::In` / `Direction::Out`). An edge may also carry a single property value, visible from either endpoint via `get_edge_property`.
+- Every edge is stored as a pair of half-edges, one per endpoint. Either endpoint can look up its incident edges (`get_edges`, `get_edges_count`) without scanning the whole graph. Edges are directed (`Direction::In` / `Direction::Out`). An edge may also carry a single property value, visible from either endpoint. The generated `<Variant>Edge` struct exposes it as a typed `property()` accessor; `Graph::get_edge_property` is the lower-level, untyped form it's built on.
 - A node doesn't need to be added to the graph yet to be referenced. Other nodes and edges in the same diff can point at it, e.g. as an edge endpoint or a `NodeRef`-typed property.
 - A diff can add nodes and edges, update a node's property (`update_node_property`), or remove nodes and edges (`remove_node`, `remove_edge`). Diffs apply incrementally, on top of the `Graph` produced by the previous one.
 

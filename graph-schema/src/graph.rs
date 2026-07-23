@@ -12,32 +12,20 @@ use crate::{
 };
 
 pub struct Graph<S> {
-    nodes: NodeMetaStorage<S>,
-    neighbors: EdgeStorage<S>,
-    properties: PropertyStorage<S>,
+    node_meta_storage: NodeMetaStorage<S>,
+    edge_storage: EdgeStorage<S>,
+    property_storage: PropertyStorage<S>,
     strings: StringsPool,
 }
 
 impl<S: Schema> Graph<S> {
     pub fn new() -> Self {
         Self {
-            nodes: NodeMetaStorage::new(),
-            neighbors: EdgeStorage::new(),
-            properties: PropertyStorage::new(),
+            node_meta_storage: NodeMetaStorage::new(),
+            edge_storage: EdgeStorage::new(),
+            property_storage: PropertyStorage::new(),
             strings: StringsPool::new(),
         }
-    }
-
-    pub fn nodes(&self) -> &NodeMetaStorage<S> {
-        &self.nodes
-    }
-
-    pub fn neighbors(&self) -> &EdgeStorage<S> {
-        &self.neighbors
-    }
-
-    pub fn properties(&self) -> &PropertyStorage<S> {
-        &self.properties
     }
 
     pub fn resolve_string(&self, str_ref: StringRef) -> Result<&str, Error> {
@@ -65,13 +53,13 @@ impl<S: Schema> Graph<S> {
     }
 
     pub fn node_count_by_kind(&self, node_kind: NodeKind<S>) -> usize {
-        self.nodes[node_kind.index()]
+        self.node_meta_storage[node_kind.index()]
             .iter()
             .filter(|&&node| !node.is_deleted())
             .count()
     }
 
-    pub fn nodes_count(&self) -> usize {
+    pub fn node_count(&self) -> usize {
         S::node_kinds()
             .iter()
             .map(|kind| self.node_count_by_kind(*kind))
@@ -79,7 +67,7 @@ impl<S: Schema> Graph<S> {
     }
 
     pub fn nodes_by_kind(&self, node_kind: NodeKind<S>) -> impl Iterator<Item = Node<S>> {
-        self.nodes[node_kind.index()]
+        self.node_meta_storage[node_kind.index()]
             .iter()
             .enumerate()
             .filter(|(_, meta)| !meta.is_deleted())
@@ -87,21 +75,21 @@ impl<S: Schema> Graph<S> {
     }
 
     pub fn is_node_deleted(&self, node_ref: Node<S>) -> bool {
-        node_is_deleted::<S>(&self.nodes, node_ref)
+        node_is_deleted::<S>(&self.node_meta_storage, node_ref)
     }
 
     pub fn nodes_by_kind_with_deleted(
         &self,
         node_kind: NodeKind<S>,
     ) -> impl Iterator<Item = Node<S>> {
-        self.nodes[node_kind.index()]
+        self.node_meta_storage[node_kind.index()]
             .iter()
             .enumerate()
             .map(move |(seq, _)| Node::<S>::new(node_kind, seq))
     }
     // TODO: this and node_count_by_kind need refactoring
     pub fn node_count_by_kind_with_deleted(&self, node_kind: NodeKind<S>) -> usize {
-        self.nodes[node_kind.index()].len()
+        self.node_meta_storage[node_kind.index()].len()
     }
 
     pub fn get_node_property(
@@ -114,7 +102,7 @@ impl<S: Schema> Graph<S> {
         let slot = S::property_storage_slot(kind, property_kind);
 
         let offsets = self
-            .properties()
+            .property_storage
             .get(slot.offset_index())
             .ok_or_else(|| Error::invalid_slot_index(slot.to_string()))
             .and_then(StorageArray::try_as_int)?;
@@ -129,16 +117,16 @@ impl<S: Schema> Graph<S> {
         let start = *start as usize;
         let end = *end as usize;
 
-        if start > end || end >= self.properties().len() {
+        if start > end || end >= self.property_storage.len() {
             return Err(Error::property_index_out_of_bounds(
                 start,
                 end,
-                self.properties().len(),
+                self.property_storage.len(),
             ));
         }
 
         Ok(self
-            .properties()
+            .property_storage
             .get(slot.values_index())
             .into_iter()
             .flat_map(move |props| (start..end).filter_map(|i| props.get(i))))
@@ -146,7 +134,7 @@ impl<S: Schema> Graph<S> {
 
     #[inline]
     fn get_edges_offset(&self, node: NodeRef, slot: EdgeStorageSlot) -> Result<(i32, i32), Error> {
-        self.neighbors()
+        self.edge_storage
             .get(slot.offset_index())
             .ok_or_else(|| Error::slot_offsets_not_found(slot.to_string()))
             .and_then(StorageArray::try_as_int)
@@ -196,7 +184,7 @@ impl<S: Schema> Graph<S> {
 
         for i in 0..length {
             let dst_node = self
-                .neighbors()
+                .edge_storage
                 .get(slot.neighbors_index())
                 .and_then(|x| x.get(start + i))
                 .and_then(|p| match p {
@@ -214,9 +202,9 @@ impl<S: Schema> Graph<S> {
         Ok(result)
     }
 
-    /// Returns the property attached to `edge`, or `Ok(None)` when the edge's
+    /// Returns the raw property attached to `edge`, or `Ok(None)` when the edge's
     /// kind carries no property value.
-    pub fn get_edge_property(&self, edge: Edge<S>) -> Result<Option<PropertyValue>, Error> {
+    pub fn get_edge_property(&self, edge: Edge<S>) -> Result<Option<StoredProperty>, Error> {
         // `edge.seq()` indexes the adjacency list of the node the edge was queried
         // from; for In-direction edges that node is `dst_node`, not `src_node`.
         let (node_ref, direction, _, _) = edge
@@ -227,11 +215,10 @@ impl<S: Schema> Graph<S> {
         let slot = S::edge_storage_slot(node_kind, direction, edge.kind());
         let (start, _) = self.get_edges_offset(node_ref, slot)?;
 
-        self.neighbors()
+        Ok(self
+            .edge_storage
             .get(slot.properties_index())
-            .and_then(|v| v.get(start as usize + edge.seq()))
-            .map(|prop| self.resolve_property(prop))
-            .transpose()
+            .and_then(|v| v.get(start as usize + edge.seq())))
     }
 }
 
@@ -490,10 +477,10 @@ impl<S: Schema> GraphDiff<S> {
         }
 
         // Append new items into the graph
-        graph.nodes.append(new_nodes);
-        graph.properties.append(new_properties);
+        graph.node_meta_storage.append(new_nodes);
+        graph.property_storage.append(new_properties);
         // Initialize the offsers array with new nodes offsets
-        graph.neighbors.append(new_edges);
+        graph.edge_storage.append(new_edges);
 
         let resolve_node_ref = |node: &NewOrExistingNode| -> Option<NodeRef> {
             match node {
@@ -514,13 +501,14 @@ impl<S: Schema> GraphDiff<S> {
                     .map(|prop| to_stored_property(prop, &mut graph.strings));
                 edge_to_halves(new_edge, resolve_node_ref, property)
             })
-            // Access `graph.nodes` directly (rather than through the `graph.is_node_deleted`
-            // method, which would borrow all of `graph`) so this closure's borrow stays
-            // disjoint from the `&mut graph.strings` borrow captured by the closure above.
+            // Access `graph.node_meta_storage` directly (rather than through the
+            // `graph.is_node_deleted` method, which would borrow all of `graph`) so this
+            // closure's borrow stays disjoint from the `&mut graph.strings` borrow
+            // captured by the closure above.
             .filter(|halves| {
                 halves
                     .iter()
-                    .all(|h| !node_is_deleted::<S>(&graph.nodes, h.node))
+                    .all(|h| !node_is_deleted::<S>(&graph.node_meta_storage, h.node))
             })
             .flatten()
             .fold(HashMap::new(), |mut acc, half| {
@@ -534,10 +522,11 @@ impl<S: Schema> GraphDiff<S> {
 
         for ((node_kind, direction, edge_kind), seq_halves) in slot_edge_halves {
             let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
-            // Safety: graph.neighbors_mut() covers all schema edge slots (including new nodes appended above); slot guarantees all
+
+            // Safety: graph.edge_storage covers all schema edge slots (including new nodes appended above); slot guarantees all
             // three indices are in-bounds and pairwise distinct.
             let [offsets, neigbors, properties] = unsafe {
-                graph.neighbors.get_disjoint_unchecked_mut([
+                graph.edge_storage.get_disjoint_unchecked_mut([
                     slot.offset_index(),
                     slot.neighbors_index(),
                     slot.properties_index(),
@@ -580,7 +569,9 @@ impl<S: Schema> GraphDiff<S> {
             match change {
                 Change::RemoveNode(node_ref) => {
                     let node: Node<S> = (*node_ref).try_into()?;
-                    if let Some(seq) = graph.nodes[node.kind().index()].get_mut(node_ref.seq()) {
+                    if let Some(seq) =
+                        graph.node_meta_storage[node.kind().index()].get_mut(node_ref.seq())
+                    {
                         seq.set_is_deleted(true);
                     }
                 }
@@ -600,10 +591,10 @@ impl<S: Schema> GraphDiff<S> {
                         .map(|prop| to_stored_property(prop, &mut graph.strings))
                         .collect();
 
-                    // Safety: graph.properties_mut() covers all schema property slots; slot guarantees both indices are in-bounds and distinct.
+                    // Safety: graph.property_storage covers all schema property slots; slot guarantees both indices are in-bounds and distinct.
                     let [offsets_arr, values_arr] = unsafe {
                         graph
-                            .properties
+                            .property_storage
                             .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
                     };
 
@@ -668,10 +659,10 @@ where
     let node_kind = S::resolve_node_kind(node_ref)?;
     let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
 
-    // Safety: graph.neighbors_mut() covers all schema edge slots; slot guarantees all three indices are in-bounds
+    // Safety: graph.edge_storage covers all schema edge slots; slot guarantees all three indices are in-bounds
     // and pairwise distinct. local_seq is within the node's adjacency range as validated by the caller.
     let [offsets_arr, neighbors_arr, properties_arr] = unsafe {
-        graph.neighbors.get_disjoint_unchecked_mut([
+        graph.edge_storage.get_disjoint_unchecked_mut([
             slot.offset_index(),
             slot.neighbors_index(),
             slot.properties_index(),
@@ -707,7 +698,7 @@ where
     let slot = S::edge_storage_slot(node.kind(), direction, edge_kind);
 
     let offsets = graph
-        .neighbors()
+        .edge_storage
         .get(slot.offset_index())
         .ok_or_else(|| Error::invalid_slot_index(slot.to_string()))?
         .try_as_int()?;
@@ -716,7 +707,7 @@ where
     let end = offsets[node.seq() + 1] as usize;
 
     let neighbors = graph
-        .neighbors()
+        .edge_storage
         .get(slot.neighbors_index())
         .ok_or_else(|| Error::neighbor_not_found(slot.neighbors_index()))?
         .try_as_ref()?;

@@ -181,14 +181,11 @@ fn main() {
         panic!("expected exactly one GEdge::Extended");
     };
     assert_eq!(extended.src_node().kind(), SimpleNode::C);
-    let edge_property = graph
-        .get_edge_property(extended.edge())
+    let edge_property = extended
+        .property()
         .expect("edge property lookup")
         .expect("Extended edges carry a property");
-    match edge_property {
-        PropertyValue::String(s) => assert_eq!(s, "refers-to"),
-        other => panic!("expected string property, got {other:?}"),
-    }
+    assert_eq!(edge_property, "refers-to");
 
     println!("simple_graph example OK");
 }

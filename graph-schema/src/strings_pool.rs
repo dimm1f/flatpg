@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// A cheap, `Copy` handle to a string interned in the graph's string pool.
 ///
@@ -22,8 +22,8 @@ impl fmt::Display for StringRef {
 /// duplicates the string's bytes. .
 #[derive(Debug, Default)]
 pub(crate) struct StringsPool {
-    entries: Vec<Rc<str>>,
-    lookup: HashMap<Rc<str>, StringRef>,
+    entries: Vec<Arc<str>>,
+    lookup: HashMap<Arc<str>, StringRef>,
 }
 
 impl StringsPool {
@@ -42,9 +42,9 @@ impl StringsPool {
         }
 
         assert!(self.entries.len() <= u32::MAX as usize);
-        let rc: Rc<str> = Rc::from(string);
+        let rc: Arc<str> = Arc::from(string);
         let r = StringRef(self.entries.len() as u32);
-        self.entries.push(Rc::clone(&rc));
+        self.entries.push(Arc::clone(&rc));
         self.lookup.insert(rc, r);
         r
     }

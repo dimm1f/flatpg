@@ -2,7 +2,10 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Error, Ident, ItemEnum, TypePath, Variant, parse2, punctuated::Punctuated};
 
-use crate::enum_derives::find_attribute;
+use crate::enum_derives::{
+    PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
+};
+use crate::property_trait_derives::{TYP_NONE, TYP_STRING, property_binding};
 
 const EDGE_KIND_ATTR: &str = "edge_kind";
 const SCHEMA_PARAM: &str = "schema";
@@ -43,73 +46,121 @@ fn edge_struct_name(name: &Ident) -> Ident {
     format_ident!("{}Edge", name)
 }
 
+fn build_edge_property_method(
+    attrs: &PropertyItemAttrs,
+    schema_ty: &TypePath,
+) -> Result<TokenStream, Error> {
+    let variant = &attrs.variant;
+    let typ = attrs
+        .prop_typ
+        .as_ref()
+        .ok_or_else(|| absent_attribute_error(variant, false))?;
+    let typ_name = typ
+        .path
+        .segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .ok_or_else(|| Error::new_spanned(typ, "expected a non-empty `typ` path"))?;
+
+    if typ_name == TYP_NONE {
+        return Ok(quote!());
+    }
+
+    let (elem_ty, pattern, expr, prop_type_path) =
+        property_binding(&typ_name, typ, &quote!(#schema_ty))?;
+
+    let self_param = if typ_name == TYP_STRING {
+        quote!(&'a self)
+    } else {
+        quote!(&self)
+    };
+
+    Ok(quote! {
+        pub fn property(#self_param) -> Result<Option<#elem_ty>, flatpg::error::Error> {
+            self.graph()
+                .get_edge_property(self.edge())?
+                .map(|p| match p {
+                    #pattern => #expr,
+                    other => Err(flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ())),
+                })
+                .transpose()
+        }
+    })
+}
+
 fn expand_edge_structs(
     name: &Ident,
-    vars: &[(&Ident, Ident)],
+    vars: &[(&Ident, Ident, PropertyItemAttrs)],
     config: &EdgeKindConfig,
-) -> TokenStream {
+) -> Result<TokenStream, Error> {
     let schema_ty = &config.schema;
-    let structs = vars.iter().map(|(v, struct_name)| {
-        quote! {
-            pub struct #struct_name<'a> {
-                graph: &'a flatpg::graph::Graph<#schema_ty>,
-                src_node: flatpg::node::Node<#schema_ty>,
-                dst_node: flatpg::node::Node<#schema_ty>,
-                direction: flatpg::edge::Direction,
-                seq: usize,
-            }
-
-            impl<'a> #struct_name<'a> {
-                pub fn new(
+    let structs = vars
+        .iter()
+        .map(|(v, struct_name, attrs)| {
+            let property_method = build_edge_property_method(attrs, schema_ty)?;
+            Ok(quote! {
+                pub struct #struct_name<'a> {
                     graph: &'a flatpg::graph::Graph<#schema_ty>,
                     src_node: flatpg::node::Node<#schema_ty>,
                     dst_node: flatpg::node::Node<#schema_ty>,
                     direction: flatpg::edge::Direction,
                     seq: usize,
-                ) -> Self {
-                    Self {
-                        graph,
-                        src_node,
-                        dst_node,
-                        direction,
-                        seq,
+                }
+
+                impl<'a> #struct_name<'a> {
+                    pub fn new(
+                        graph: &'a flatpg::graph::Graph<#schema_ty>,
+                        src_node: flatpg::node::Node<#schema_ty>,
+                        dst_node: flatpg::node::Node<#schema_ty>,
+                        direction: flatpg::edge::Direction,
+                        seq: usize,
+                    ) -> Self {
+                        Self {
+                            graph,
+                            src_node,
+                            dst_node,
+                            direction,
+                            seq,
+                        }
+                    }
+
+                    #property_method
+                }
+
+                impl<'a> flatpg::edge::StoredEdge<#schema_ty> for #struct_name<'a> {
+                    #[inline]
+                    fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
+                        self.graph
+                    }
+                    #[inline]
+                    fn src_node(&self) -> flatpg::node::Node<#schema_ty> {
+                        self.src_node
+                    }
+                    #[inline]
+                    fn dst_node(&self) -> flatpg::node::Node<#schema_ty> {
+                        self.dst_node
+                    }
+                    #[inline]
+                    fn direction(&self) -> flatpg::edge::Direction {
+                        self.direction
+                    }
+                    #[inline]
+                    fn seq(&self) -> usize {
+                        self.seq
+                    }
+                    #[inline]
+                    fn kind(&self) -> #name {
+                        #name::#v
                     }
                 }
-            }
-
-            impl<'a> flatpg::edge::StoredEdge<#schema_ty> for #struct_name<'a> {
-                #[inline]
-                fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
-                    self.graph
-                }
-                #[inline]
-                fn src_node(&self) -> flatpg::node::Node<#schema_ty> {
-                    self.src_node
-                }
-                #[inline]
-                fn dst_node(&self) -> flatpg::node::Node<#schema_ty> {
-                    self.dst_node
-                }
-                #[inline]
-                fn direction(&self) -> flatpg::edge::Direction {
-                    self.direction
-                }
-                #[inline]
-                fn seq(&self) -> usize {
-                    self.seq
-                }
-                #[inline]
-                fn kind(&self) -> #name {
-                    #name::#v
-                }
-            }
-        }
-    });
-    quote! {
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(quote! {
         #(
             #structs
         )*
-    }
+    })
 }
 
 pub fn edge_structs_derive(
@@ -122,18 +173,29 @@ pub fn edge_structs_derive(
     let variants = input
         .variants
         .iter()
-        .map(|Variant { ident: variant, .. }| (variant, edge_struct_name(variant)))
-        .collect::<Vec<_>>();
+        .map(
+            |Variant {
+                 ident: variant,
+                 attrs,
+                 ..
+             }| {
+                let attr = find_attribute(PROPERTY_ATTR, attrs)
+                    .ok_or_else(|| absent_attribute_error(variant, false))?;
+                let parsed = parse_property_attr(attr, variant)?;
+                Ok((variant, edge_struct_name(variant), parsed))
+            },
+        )
+        .collect::<Result<Vec<_>, Error>>()?;
 
-    let structs = expand_edge_structs(ident, &variants, config);
+    let structs = expand_edge_structs(ident, &variants, config)?;
 
-    let gedge_variants = variants.iter().map(|(v, struct_name)| {
+    let gedge_variants = variants.iter().map(|(v, struct_name, _)| {
         quote! {
             #v(#struct_name<'a>)
         }
     });
 
-    let gedge_new_variants = variants.iter().map(|(v, struct_name)| {
+    let gedge_new_variants = variants.iter().map(|(v, struct_name, _)| {
         quote! {
             #ident::#v => Self::#v(#struct_name::new(graph, src_node, dst_node, direction, seq))
         }
@@ -141,7 +203,7 @@ pub fn edge_structs_derive(
 
     let match_gedge = variants
         .iter()
-        .map(|(v, _)| {
+        .map(|(v, _, _)| {
             quote! {
                 GEdge::#v(edge)
             }
@@ -316,6 +378,13 @@ mod tests {
         .expect("valid config")
     }
 
+    fn return_type_string(f: &syn::ImplItemFn) -> String {
+        let syn::ReturnType::Type(_, ty) = &f.sig.output else {
+            panic!("expected a return type")
+        };
+        quote::quote!(#ty).to_string()
+    }
+
     #[test]
     fn parse_edge_kind_config_missing_attribute_errors() {
         let input = parse_enum("enum E { A, B }");
@@ -405,5 +474,94 @@ mod tests {
                 "wrong match arm count for {method}"
             );
         }
+    }
+
+    #[test]
+    fn property_method_generated_for_typed_variant() {
+        let input = parse_enum(
+            r#"enum E {
+                #[property(typ = None)] Plain,
+                #[property(typ = String)] Labeled,
+            }"#,
+        );
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+
+        let inherent = find_inherent_impl(&file, "LabeledEdge")
+            .expect("inherent impl for LabeledEdge not found");
+        assert!(find_method(inherent, "property").is_some());
+    }
+
+    #[test]
+    fn property_method_absent_for_none_typed_variant() {
+        let input = parse_enum(
+            r#"enum E {
+                #[property(typ = None)] Plain,
+                #[property(typ = String)] Labeled,
+            }"#,
+        );
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+
+        let inherent =
+            find_inherent_impl(&file, "PlainEdge").expect("inherent impl for PlainEdge not found");
+        assert!(find_method(inherent, "property").is_none());
+    }
+
+    #[test]
+    fn property_method_return_type_per_typ() {
+        let input = parse_enum(
+            r#"enum E {
+                #[property(typ = String)] Labeled,
+                #[property(typ = Int)] Weighted,
+                #[property(typ = NodeRef)] Linked,
+            }"#,
+        );
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+
+        let labeled = find_method(
+            find_inherent_impl(&file, "LabeledEdge").unwrap(),
+            "property",
+        )
+        .unwrap();
+        let labeled_ret = return_type_string(labeled);
+        assert!(labeled_ret.contains("& str"));
+        assert!(!labeled_ret.contains("String"));
+
+        let weighted = find_method(
+            find_inherent_impl(&file, "WeightedEdge").unwrap(),
+            "property",
+        )
+        .unwrap();
+        let weighted_ret = return_type_string(weighted);
+        assert!(weighted_ret.contains("i32"));
+        assert!(!weighted_ret.contains('&'));
+
+        let linked =
+            find_method(find_inherent_impl(&file, "LinkedEdge").unwrap(), "property").unwrap();
+        let linked_ret = return_type_string(linked);
+        assert!(linked_ret.contains("Node"));
+        assert!(linked_ret.contains("MySchema"));
+    }
+
+    #[test]
+    fn gedge_has_no_property_method() {
+        let input = parse_enum(
+            r#"enum E {
+                #[property(typ = None)] Plain,
+                #[property(typ = String)] Labeled,
+            }"#,
+        );
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+
+        let gedge_impl =
+            find_inherent_impl(&file, "GEdge").expect("inherent impl for GEdge not found");
+        assert!(find_method(gedge_impl, "property").is_none());
+
+        let stored_edge =
+            find_impl(&file, "StoredEdge", "GEdge").expect("StoredEdge impl for GEdge not found");
+        assert!(find_method(stored_edge, "property").is_none());
     }
 }

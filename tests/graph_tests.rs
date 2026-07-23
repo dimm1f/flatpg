@@ -6,6 +6,7 @@ use flatpg::{
     prelude::*,
     property::PropertyValue,
     schema::Schema,
+    storage::StoredProperty,
 };
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
@@ -45,9 +46,12 @@ impl Schema for TestSchema {
     type P = TestProperty;
 }
 
-fn string_value(prop: PropertyValue) -> String {
+fn string_value(graph: &Graph<TestSchema>, prop: StoredProperty) -> String {
     match prop {
-        PropertyValue::String(s) => s,
+        StoredProperty::StringRef(v) => graph
+            .resolve_string(v)
+            .expect("string ref resolves")
+            .to_string(),
         other => panic!("expected string property, got {other:?}"),
     }
 }
@@ -76,7 +80,7 @@ fn edge_property_is_visible_from_both_endpoints() {
         .get_edge_property(out_edges.remove(0))
         .expect("edge property lookup")
         .expect("property from Out perspective");
-    assert_eq!(string_value(out_prop), "p0");
+    assert_eq!(string_value(&graph, out_prop), "p0");
 
     let mut in_edges = graph
         .get_edges(b, TestEdge::Labeled, Direction::In)
@@ -86,7 +90,7 @@ fn edge_property_is_visible_from_both_endpoints() {
         .get_edge_property(in_edges.remove(0))
         .expect("edge property lookup")
         .expect("property from In perspective");
-    assert_eq!(string_value(in_prop), "p0");
+    assert_eq!(string_value(&graph, in_prop), "p0");
 }
 
 #[test]
@@ -125,11 +129,11 @@ fn stored_edge_struct_and_gedge_match_graph_get_edges() {
     assert_eq!(labeled_edge.direction(), edge.direction());
     assert_eq!(labeled_edge.seq(), edge.seq());
 
-    let prop = graph
-        .get_edge_property(labeled_edge.edge())
+    let prop = labeled_edge
+        .property()
         .expect("edge property lookup")
         .expect("Labeled edges carry a property");
-    assert_eq!(string_value(prop), "p0");
+    assert_eq!(prop, "p0");
 
     let gedge = GEdge::new(
         &graph,
@@ -177,7 +181,7 @@ fn in_edge_properties_match_their_edges() {
             .get_edge_property(edge)
             .expect("edge property lookup")
             .expect("property from In perspective");
-        assert_eq!(string_value(prop), expected);
+        assert_eq!(string_value(&graph, prop), expected);
     }
 }
 
@@ -548,7 +552,7 @@ fn add_edge_with_property_stores_property() {
         .get_edge_property(edges.into_iter().next().unwrap())
         .expect("edge property lookup")
         .expect("edge property should be set");
-    assert_eq!(string_value(property), "x");
+    assert_eq!(string_value(&graph, property), "x");
 }
 
 fn setup_three_file_nodes() -> Graph<TestSchema> {

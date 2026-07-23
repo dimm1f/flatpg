@@ -6,17 +6,17 @@ use crate::enum_derives::{
     PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
 };
 
-const TYP_NONE: &str = "None";
-const TYP_BOOL: &str = "Bool";
-const TYP_BYTE: &str = "Byte";
-const TYP_SHORT: &str = "Short";
-const TYP_INT: &str = "Int";
-const TYP_LONG: &str = "Long";
-const TYP_FLOAT: &str = "Float";
-const TYP_DOUBLE: &str = "Double";
-const TYP_NODE_REF: &str = "NodeRef";
-const TYP_STRING: &str = "String";
-const QTY_MULTI: &str = "Multi";
+pub(crate) const TYP_NONE: &str = "None";
+pub(crate) const TYP_BOOL: &str = "Bool";
+pub(crate) const TYP_BYTE: &str = "Byte";
+pub(crate) const TYP_SHORT: &str = "Short";
+pub(crate) const TYP_INT: &str = "Int";
+pub(crate) const TYP_LONG: &str = "Long";
+pub(crate) const TYP_FLOAT: &str = "Float";
+pub(crate) const TYP_DOUBLE: &str = "Double";
+pub(crate) const TYP_NODE_REF: &str = "NodeRef";
+pub(crate) const TYP_STRING: &str = "String";
+pub(crate) const QTY_MULTI: &str = "Multi";
 
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
@@ -103,6 +103,75 @@ pub fn property_traits_derive(input: &ItemEnum) -> TokenStream {
     }
 }
 
+pub(crate) fn property_binding(
+    typ_name: &str,
+    typ: &syn::TypePath,
+    schema_ty: &TokenStream,
+) -> Result<(TokenStream, TokenStream, TokenStream, TokenStream), Error> {
+    Ok(match typ_name {
+        TYP_BOOL => (
+            quote!(bool),
+            quote!(flatpg::storage::StoredProperty::Bool(v)),
+            quote!(Ok(v)),
+            quote!(flatpg::property::PropertyType::Bool),
+        ),
+        TYP_BYTE => (
+            quote!(u8),
+            quote!(flatpg::storage::StoredProperty::Byte(v)),
+            quote!(Ok(v)),
+            quote!(flatpg::property::PropertyType::Byte),
+        ),
+        TYP_SHORT => (
+            quote!(i16),
+            quote!(flatpg::storage::StoredProperty::Short(v)),
+            quote!(Ok(v)),
+            quote!(flatpg::property::PropertyType::Short),
+        ),
+        TYP_INT => (
+            quote!(i32),
+            quote!(flatpg::storage::StoredProperty::Int(v)),
+            quote!(Ok(v)),
+            quote!(flatpg::property::PropertyType::Int),
+        ),
+        TYP_LONG => (
+            quote!(i64),
+            quote!(flatpg::storage::StoredProperty::Long(v)),
+            quote!(Ok(v)),
+            quote!(flatpg::property::PropertyType::Long),
+        ),
+        TYP_FLOAT => (
+            quote!(f32),
+            quote!(flatpg::storage::StoredProperty::Float(v)),
+            quote!(Ok(v)),
+            quote!(flatpg::property::PropertyType::Float),
+        ),
+        TYP_DOUBLE => (
+            quote!(f64),
+            quote!(flatpg::storage::StoredProperty::Double(v)),
+            quote!(Ok(v)),
+            quote!(flatpg::property::PropertyType::Double),
+        ),
+        TYP_NODE_REF => (
+            quote!(flatpg::node::Node<#schema_ty>),
+            quote!(flatpg::storage::StoredProperty::NodeRef(v)),
+            quote!(flatpg::node::Node::<#schema_ty>::try_from(v)),
+            quote!(flatpg::property::PropertyType::NodeRef),
+        ),
+        TYP_STRING => (
+            quote!(&str),
+            quote!(flatpg::storage::StoredProperty::StringRef(v)),
+            quote!(self.graph().resolve_string(v)),
+            quote!(flatpg::property::PropertyType::String),
+        ),
+        other => {
+            return Err(Error::new_spanned(
+                typ,
+                format!("unsupported property typ `{other}`"),
+            ));
+        }
+    })
+}
+
 fn build_property_trait(
     enum_ident: &Ident,
     vis: &syn::Visibility,
@@ -147,68 +216,7 @@ fn build_property_trait(
 
     let method_name = method_ident(variant);
 
-    let (elem_ty, pattern, expr, prop_type_path) = match typ_name.as_str() {
-        TYP_BOOL => (
-            quote!(bool),
-            quote!(flatpg::storage::StoredProperty::Bool(v)),
-            quote!(Ok(v)),
-            quote!(flatpg::property::PropertyType::Bool),
-        ),
-        TYP_BYTE => (
-            quote!(u8),
-            quote!(flatpg::storage::StoredProperty::Byte(v)),
-            quote!(Ok(v)),
-            quote!(flatpg::property::PropertyType::Byte),
-        ),
-        TYP_SHORT => (
-            quote!(i16),
-            quote!(flatpg::storage::StoredProperty::Short(v)),
-            quote!(Ok(v)),
-            quote!(flatpg::property::PropertyType::Short),
-        ),
-        TYP_INT => (
-            quote!(i32),
-            quote!(flatpg::storage::StoredProperty::Int(v)),
-            quote!(Ok(v)),
-            quote!(flatpg::property::PropertyType::Int),
-        ),
-        TYP_LONG => (
-            quote!(i64),
-            quote!(flatpg::storage::StoredProperty::Long(v)),
-            quote!(Ok(v)),
-            quote!(flatpg::property::PropertyType::Long),
-        ),
-        TYP_FLOAT => (
-            quote!(f32),
-            quote!(flatpg::storage::StoredProperty::Float(v)),
-            quote!(Ok(v)),
-            quote!(flatpg::property::PropertyType::Float),
-        ),
-        TYP_DOUBLE => (
-            quote!(f64),
-            quote!(flatpg::storage::StoredProperty::Double(v)),
-            quote!(Ok(v)),
-            quote!(flatpg::property::PropertyType::Double),
-        ),
-        TYP_NODE_REF => (
-            quote!(flatpg::node::Node<S>),
-            quote!(flatpg::storage::StoredProperty::NodeRef(v)),
-            quote!(flatpg::node::Node::<S>::try_from(v)),
-            quote!(flatpg::property::PropertyType::NodeRef),
-        ),
-        TYP_STRING => (
-            quote!(&str),
-            quote!(flatpg::storage::StoredProperty::StringRef(v)),
-            quote!(self.graph().resolve_string(v)),
-            quote!(flatpg::property::PropertyType::String),
-        ),
-        other => {
-            return Err(Error::new_spanned(
-                typ,
-                format!("unsupported property typ `{other}`"),
-            ));
-        }
-    };
+    let (elem_ty, pattern, expr, prop_type_path) = property_binding(&typ_name, typ, &quote!(S))?;
 
     let (generics, self_param, where_clause) = if typ_name == TYP_STRING {
         (quote!(<'a>), quote!(&'a self), quote!(where S: 'a))
