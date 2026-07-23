@@ -23,6 +23,38 @@ pub(crate) fn parse_comma_separated_types(
     attr.parse_args_with(Punctuated::<syn::TypePath, syn::Token![,]>::parse_terminated)
 }
 
+pub(crate) fn require_attribute<'a>(
+    attr_name: &str,
+    attrs: &'a [Attribute],
+    span: impl ToTokens,
+    item_kind: &str,
+    usage: &str,
+) -> Result<&'a Attribute, Error> {
+    find_attribute(attr_name, attrs).ok_or_else(|| {
+        Error::new_spanned(
+            span,
+            format!("{item_kind} must be annotated with #[{attr_name}({usage})]"),
+        )
+    })
+}
+
+pub(crate) fn require_type_param(
+    attr: &Attribute,
+    args: &Punctuated<syn::MetaNameValue, syn::Token![,]>,
+    key: &str,
+    attr_name: &str,
+) -> Result<TypePath, Error> {
+    args.iter()
+        .find(|m| m.path.is_ident(key))
+        .ok_or_else(|| {
+            Error::new_spanned(
+                attr,
+                format!("missing `{key}` parameter in #[{attr_name}(...)]"),
+            )
+        })
+        .and_then(|m| parse2(m.value.to_token_stream()))
+}
+
 pub fn enum_item_all_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
     let vis = &input.vis;
@@ -288,52 +320,14 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syn::{Expr, File, ImplItem, Item, Stmt, parse_str, parse2, punctuated::Punctuated};
-
-    fn parse_enum(src: &str) -> ItemEnum {
-        parse_str(src).expect("failed to parse enum")
-    }
+    use crate::common::test_support::{
+        find_impl, find_method, has_compile_error, match_arm_count, parse_enum, parse_output,
+    };
+    use syn::{Expr, File, ImplItem, Item, Stmt, parse_str, punctuated::Punctuated};
 
     fn struct_attrs(src: &str) -> Vec<Attribute> {
         let item: syn::ItemStruct = parse_str(src).unwrap();
         item.attrs
-    }
-
-    fn parse_output(ts: TokenStream) -> File {
-        parse2(ts).expect("generated output is not valid Rust")
-    }
-
-    fn find_impl<'a>(
-        file: &'a File,
-        trait_name: &str,
-        self_type: &str,
-    ) -> Option<&'a syn::ItemImpl> {
-        file.items.iter().find_map(|item| {
-            let Item::Impl(impl_block) = item else {
-                return None;
-            };
-            let trait_matches = impl_block.trait_.as_ref().is_some_and(|(_, path, _)| {
-                path.segments.last().is_some_and(|s| s.ident == trait_name)
-            });
-            let type_matches = match impl_block.self_ty.as_ref() {
-                syn::Type::Path(tp) => tp
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == self_type),
-                _ => false,
-            };
-            (trait_matches && type_matches).then_some(impl_block)
-        })
-    }
-
-    fn find_method<'a>(impl_block: &'a syn::ItemImpl, name: &str) -> Option<&'a syn::ImplItemFn> {
-        impl_block.items.iter().find_map(|item| {
-            let ImplItem::Fn(method) = item else {
-                return None;
-            };
-            (method.sig.ident == name).then_some(method)
-        })
     }
 
     fn find_assoc_type<'a>(
@@ -350,26 +344,6 @@ mod tests {
         file.items.iter().find_map(|item| {
             let Item::Const(c) = item else { return None };
             (c.ident == ident).then_some(c)
-        })
-    }
-
-    fn match_arm_count(method: &syn::ImplItemFn) -> Option<usize> {
-        method.block.stmts.iter().find_map(|stmt| match stmt {
-            Stmt::Expr(Expr::Match(m), _) => Some(m.arms.len()),
-            _ => None,
-        })
-    }
-
-    fn has_compile_error(ts: TokenStream) -> bool {
-        parse2::<File>(ts).is_ok_and(|file| {
-            file.items.iter().any(|item| {
-                let Item::Macro(m) = item else { return false };
-                m.mac
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == "compile_error")
-            })
         })
     }
 

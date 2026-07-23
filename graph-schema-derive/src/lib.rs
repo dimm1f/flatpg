@@ -1,5 +1,6 @@
 extern crate proc_macro;
 
+mod common;
 mod edge_structs_derives;
 mod enum_derives;
 mod node_structs_derives;

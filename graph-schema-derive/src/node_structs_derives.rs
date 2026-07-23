@@ -1,12 +1,13 @@
 use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote};
-use syn::{Error, Ident, ItemEnum, TypePath, Variant, parse2, punctuated::Punctuated};
+use quote::{format_ident, quote};
+use syn::{Error, Ident, ItemEnum, TypePath, Variant};
 
-use crate::enum_derives::{find_attribute, parse_comma_separated_types};
+use crate::common::{SCHEMA_PARAM, parse_kind_attr};
+use crate::enum_derives::{parse_comma_separated_types, require_attribute, require_type_param};
 
 const NODE_KIND_ATTR: &str = "node_kind";
-const SCHEMA_PARAM: &str = "schema";
 const PROPERTY_KIND_PARAM: &str = "property_kind";
+const PROPERTIES_ATTR: &str = "properties";
 
 pub struct NodeKindConfig {
     pub schema: TypePath,
@@ -14,35 +15,15 @@ pub struct NodeKindConfig {
 }
 
 pub fn parse_node_kind_config(input: &ItemEnum) -> Result<NodeKindConfig, Error> {
-    let attr = find_attribute(NODE_KIND_ATTR, &input.attrs).ok_or_else(|| {
-        Error::new_spanned(
-            &input.ident,
-            format!(
-                "enum must be annotated with \
-                 #[{NODE_KIND_ATTR}({SCHEMA_PARAM} = ..., \
-                 {PROPERTY_KIND_PARAM} = ...)]"
-            ),
-        )
-    })?;
-
-    let args =
-        attr.parse_args_with(Punctuated::<syn::MetaNameValue, syn::Token![,]>::parse_terminated)?;
-
-    let get = |key: &str| -> Result<TypePath, Error> {
-        args.iter()
-            .find(|m| m.path.is_ident(key))
-            .ok_or_else(|| {
-                Error::new_spanned(
-                    attr,
-                    format!("missing `{key}` parameter in #[{NODE_KIND_ATTR}(...)]"),
-                )
-            })
-            .and_then(|m| parse2(m.value.to_token_stream()))
-    };
+    let (attr, args) = parse_kind_attr(
+        NODE_KIND_ATTR,
+        input,
+        &format!("{SCHEMA_PARAM} = ..., {PROPERTY_KIND_PARAM} = ..."),
+    )?;
 
     Ok(NodeKindConfig {
-        schema: get(SCHEMA_PARAM)?,
-        property_kind: get(PROPERTY_KIND_PARAM)?,
+        schema: require_type_param(attr, &args, SCHEMA_PARAM, NODE_KIND_ATTR)?,
+        property_kind: require_type_param(attr, &args, PROPERTY_KIND_PARAM, NODE_KIND_ATTR)?,
     })
 }
 
@@ -219,13 +200,7 @@ pub fn node_available_properties_derive(
         .variants
         .iter()
         .map(|Variant { ident, attrs, .. }| {
-            let props = find_attribute("properties", attrs)
-                .ok_or_else(|| {
-                    Error::new_spanned(
-                        ident,
-                        "variant must be annotated with \"#[properties(...)]\"",
-                    )
-                })
+            let props = require_attribute(PROPERTIES_ATTR, attrs, ident, "variant", "...")
                 .and_then(parse_comma_separated_types)?
                 .into_iter()
                 .collect::<Vec<_>>();

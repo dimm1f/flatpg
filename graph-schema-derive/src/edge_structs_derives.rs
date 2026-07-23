@@ -1,44 +1,25 @@
 use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote};
-use syn::{Error, Ident, ItemEnum, TypePath, Variant, parse2, punctuated::Punctuated};
+use quote::{format_ident, quote};
+use syn::{Error, Ident, ItemEnum, TypePath, Variant};
 
+use crate::common::{SCHEMA_PARAM, parse_kind_attr, typ_last_segment_name};
 use crate::enum_derives::{
     PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
+    require_type_param,
 };
 use crate::property_trait_derives::{TYP_NONE, TYP_STRING, property_binding};
 
 const EDGE_KIND_ATTR: &str = "edge_kind";
-const SCHEMA_PARAM: &str = "schema";
 
 pub struct EdgeKindConfig {
     pub schema: TypePath,
 }
 
 pub fn parse_edge_kind_config(input: &ItemEnum) -> Result<EdgeKindConfig, Error> {
-    let attr = find_attribute(EDGE_KIND_ATTR, &input.attrs).ok_or_else(|| {
-        Error::new_spanned(
-            &input.ident,
-            format!("enum must be annotated with #[{EDGE_KIND_ATTR}({SCHEMA_PARAM} = ...)]"),
-        )
-    })?;
-
-    let args =
-        attr.parse_args_with(Punctuated::<syn::MetaNameValue, syn::Token![,]>::parse_terminated)?;
-
-    let get = |key: &str| -> Result<TypePath, Error> {
-        args.iter()
-            .find(|m| m.path.is_ident(key))
-            .ok_or_else(|| {
-                Error::new_spanned(
-                    attr,
-                    format!("missing `{key}` parameter in #[{EDGE_KIND_ATTR}(...)]"),
-                )
-            })
-            .and_then(|m| parse2(m.value.to_token_stream()))
-    };
+    let (attr, args) = parse_kind_attr(EDGE_KIND_ATTR, input, &format!("{SCHEMA_PARAM} = ..."))?;
 
     Ok(EdgeKindConfig {
-        schema: get(SCHEMA_PARAM)?,
+        schema: require_type_param(attr, &args, SCHEMA_PARAM, EDGE_KIND_ATTR)?,
     })
 }
 
@@ -55,12 +36,7 @@ fn build_edge_property_method(
         .prop_typ
         .as_ref()
         .ok_or_else(|| absent_attribute_error(variant, false))?;
-    let typ_name = typ
-        .path
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .ok_or_else(|| Error::new_spanned(typ, "expected a non-empty `typ` path"))?;
+    let typ_name = typ_last_segment_name(typ)?;
 
     if typ_name == TYP_NONE {
         return Ok(quote!());
@@ -286,43 +262,14 @@ pub fn edge_structs_derive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syn::{Expr, File, ImplItem, Item, Stmt, parse_str};
-
-    fn parse_enum(src: &str) -> ItemEnum {
-        parse_str(src).expect("failed to parse enum")
-    }
-
-    fn parse_output(ts: TokenStream) -> File {
-        parse2(ts).expect("generated output is not valid Rust")
-    }
-
-    fn find_impl<'a>(
-        file: &'a File,
-        trait_name: &str,
-        self_type: &str,
-    ) -> Option<&'a syn::ItemImpl> {
-        file.items.iter().find_map(|item| {
-            let Item::Impl(impl_block) = item else {
-                return None;
-            };
-            let trait_matches = impl_block.trait_.as_ref().is_some_and(|(_, path, _)| {
-                path.segments.last().is_some_and(|s| s.ident == trait_name)
-            });
-            let type_matches = match impl_block.self_ty.as_ref() {
-                syn::Type::Path(tp) => tp
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == self_type),
-                _ => false,
-            };
-            (trait_matches && type_matches).then_some(impl_block)
-        })
-    }
+    use crate::common::test_support::{
+        find_impl, find_method, match_arm_count, parse_enum, parse_output, return_type_string,
+    };
+    use syn::File;
 
     fn find_inherent_impl<'a>(file: &'a File, self_type: &str) -> Option<&'a syn::ItemImpl> {
         file.items.iter().find_map(|item| {
-            let Item::Impl(impl_block) = item else {
+            let syn::Item::Impl(impl_block) = item else {
                 return None;
             };
             let type_matches = match impl_block.self_ty.as_ref() {
@@ -337,18 +284,9 @@ mod tests {
         })
     }
 
-    fn find_method<'a>(impl_block: &'a syn::ItemImpl, name: &str) -> Option<&'a syn::ImplItemFn> {
-        impl_block.items.iter().find_map(|item| {
-            let ImplItem::Fn(method) = item else {
-                return None;
-            };
-            (method.sig.ident == name).then_some(method)
-        })
-    }
-
     fn find_struct<'a>(file: &'a File, name: &str) -> Option<&'a syn::ItemStruct> {
         file.items.iter().find_map(|item| {
-            let Item::Struct(s) = item else {
+            let syn::Item::Struct(s) = item else {
                 return None;
             };
             (s.ident == name).then_some(s)
@@ -357,17 +295,10 @@ mod tests {
 
     fn find_enum<'a>(file: &'a File, name: &str) -> Option<&'a syn::ItemEnum> {
         file.items.iter().find_map(|item| {
-            let Item::Enum(e) = item else {
+            let syn::Item::Enum(e) = item else {
                 return None;
             };
             (e.ident == name).then_some(e)
-        })
-    }
-
-    fn match_arm_count(method: &syn::ImplItemFn) -> Option<usize> {
-        method.block.stmts.iter().find_map(|stmt| match stmt {
-            Stmt::Expr(Expr::Match(m), _) => Some(m.arms.len()),
-            _ => None,
         })
     }
 
@@ -376,13 +307,6 @@ mod tests {
             "#[edge_kind(schema = {schema})] enum E {{ A, B }}"
         )))
         .expect("valid config")
-    }
-
-    fn return_type_string(f: &syn::ImplItemFn) -> String {
-        let syn::ReturnType::Type(_, ty) = &f.sig.output else {
-            panic!("expected a return type")
-        };
-        quote::quote!(#ty).to_string()
     }
 
     #[test]
@@ -525,7 +449,7 @@ mod tests {
             "property",
         )
         .unwrap();
-        let labeled_ret = return_type_string(labeled);
+        let labeled_ret = return_type_string(&labeled.sig);
         assert!(labeled_ret.contains("& str"));
         assert!(!labeled_ret.contains("String"));
 
@@ -534,13 +458,13 @@ mod tests {
             "property",
         )
         .unwrap();
-        let weighted_ret = return_type_string(weighted);
+        let weighted_ret = return_type_string(&weighted.sig);
         assert!(weighted_ret.contains("i32"));
         assert!(!weighted_ret.contains('&'));
 
         let linked =
             find_method(find_inherent_impl(&file, "LinkedEdge").unwrap(), "property").unwrap();
-        let linked_ret = return_type_string(linked);
+        let linked_ret = return_type_string(&linked.sig);
         assert!(linked_ret.contains("Node"));
         assert!(linked_ret.contains("MySchema"));
     }

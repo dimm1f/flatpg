@@ -2,6 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Error, Ident, ItemEnum, Variant};
 
+use crate::common::typ_last_segment_name;
 use crate::enum_derives::{
     PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
 };
@@ -187,12 +188,7 @@ fn build_property_trait(
         .as_ref()
         .ok_or_else(|| absent_attribute_error(variant, true))?;
 
-    let typ_name = typ
-        .path
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .ok_or_else(|| Error::new_spanned(typ, "expected a non-empty `typ` path"))?;
+    let typ_name = typ_last_segment_name(typ)?;
 
     if typ_name == TYP_NONE {
         return Err(Error::new_spanned(
@@ -264,19 +260,13 @@ fn build_property_trait(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syn::{File, ItemTrait, TraitItemFn, parse_str, parse2};
+    use crate::common::test_support::{
+        has_compile_error, parse_enum, parse_output, return_type_string,
+    };
+    use syn::{File, ItemTrait, TraitItemFn};
 
-    const IDENT_COMPILE_ERROR: &str = "compile_error";
     const IDENT_SCHEMA: &str = "Schema";
     const IDENT_STORED_NODE: &str = "StoredNode";
-
-    fn parse_enum(src: &str) -> ItemEnum {
-        parse_str(src).expect("failed to parse enum")
-    }
-
-    fn parse_output(ts: TokenStream) -> File {
-        parse2(ts).expect("generated output is not valid Rust")
-    }
 
     fn find_trait<'a>(file: &'a File, name: &str) -> Option<&'a ItemTrait> {
         file.items.iter().find_map(|item| {
@@ -294,28 +284,6 @@ mod tests {
             };
             (f.sig.ident == name).then_some(f)
         })
-    }
-
-    fn has_compile_error(ts: TokenStream) -> bool {
-        parse2::<File>(ts).is_ok_and(|file| {
-            file.items.iter().any(|item| {
-                let syn::Item::Macro(m) = item else {
-                    return false;
-                };
-                m.mac
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == IDENT_COMPILE_ERROR)
-            })
-        })
-    }
-
-    fn return_type_string(f: &TraitItemFn) -> String {
-        let syn::ReturnType::Type(_, ty) = &f.sig.output else {
-            panic!("expected a return type")
-        };
-        quote::quote!(#ty).to_string()
     }
 
     #[test]
@@ -364,7 +332,7 @@ mod tests {
         let file = parse_output(property_traits_derive(&input));
         let t = find_trait(&file, "Count").unwrap();
         let m = find_trait_method(t, "count").unwrap();
-        let ret = return_type_string(m);
+        let ret = return_type_string(&m.sig);
         assert!(ret.contains("Result"));
         assert!(ret.contains("i32"));
         assert!(!ret.contains("Vec"));
@@ -376,7 +344,7 @@ mod tests {
         let file = parse_output(property_traits_derive(&input));
         let t = find_trait(&file, "Tags").unwrap();
         let m = find_trait_method(t, "tags").unwrap();
-        let ret = return_type_string(m);
+        let ret = return_type_string(&m.sig);
         assert!(ret.contains("Vec"));
         assert!(ret.contains("str"));
     }
@@ -387,7 +355,7 @@ mod tests {
         let file = parse_output(property_traits_derive(&input));
         let t = find_trait(&file, "Owner").unwrap();
         let m = find_trait_method(t, "owner").unwrap();
-        let ret = return_type_string(m);
+        let ret = return_type_string(&m.sig);
         assert!(ret.contains("Node"));
     }
 
