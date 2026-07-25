@@ -7,7 +7,7 @@ use crate::enum_derives::{
     PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
     require_type_param,
 };
-use crate::property_trait_derives::{TYP_NONE, TYP_STRING, property_binding};
+use crate::property_trait_derives::{PropertyBinding, TYP_NONE, TYP_STRING, property_binding};
 
 const EDGE_KIND_ATTR: &str = "edge_kind";
 
@@ -42,8 +42,12 @@ fn build_edge_property_method(
         return Ok(quote!());
     }
 
-    let (elem_ty, pattern, expr, prop_type_path) =
-        property_binding(&typ_name, typ, &quote!(#schema_ty))?;
+    let PropertyBinding {
+        elem_ty,
+        pattern,
+        expr,
+        prop_type_path,
+    } = property_binding(&typ_name, typ, &quote!(#schema_ty))?;
 
     let self_param = if typ_name == TYP_STRING {
         quote!(&'a self)
