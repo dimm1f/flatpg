@@ -1,4 +1,5 @@
 pub mod edge;
+pub mod enum_property;
 pub mod error;
 pub mod graph;
 pub mod node;
@@ -63,16 +64,6 @@ where
     fn properties(&self) -> &'static [P];
 }
 
-pub trait GraphItemKind:
-    ItemAsStr + ItemIndex + ItemFromIndex + ItemAll + ItemFromStr + 'static
-{
-}
-
-impl<T> GraphItemKind for T where
-    T: ItemAsStr + ItemIndex + ItemFromIndex + ItemAll + ItemFromStr + 'static
-{
-}
-
 pub trait NodeItemKind<P: PropertyItemKind>:
     ItemAsStr
     + ItemFromStr
@@ -115,5 +106,21 @@ pub trait PropertyItemKind:
     + Eq
     + Hash
     + 'static
+{
+}
+
+pub trait EnumPropertyIndex:
+    ItemAsStr + ItemIndex + ItemFromIndex + ItemAll + ItemFromStr + 'static
+{
+    fn enum_property_index() -> usize;
+}
+
+pub trait EnumPropertyRegistry:
+    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Eq + Hash + 'static
+{
+}
+
+pub trait EnumProperty:
+    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Eq + Hash + 'static
 {
 }

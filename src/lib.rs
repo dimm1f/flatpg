@@ -9,14 +9,14 @@
 pub mod prelude {
 
     pub use graph_schema_derive::{
-        EdgeItemKind, ItemAll, ItemAsStr, ItemFromIndex, ItemFromStr, ItemIndex, NodeItemKind,
-        PropertyItemKind,
+        EdgeItemKind, EnumProperty, EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex,
+        ItemFromStr, ItemIndex, NodeItemKind, PropertyItemKind,
     };
 
     pub use graph_schema::{
-        AvailableProperties, EdgeDirectionKind, EdgeItemKind, GraphItemKind, ItemAll, ItemAsStr,
-        ItemFromIndex, ItemFromStr, ItemIndex, ItemKindPropertyType, NodeItemKind,
-        PropertyItemKind,
+        AvailableProperties, EdgeDirectionKind, EdgeItemKind, EnumProperty, EnumPropertyIndex,
+        EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex, ItemFromStr, ItemIndex,
+        ItemKindPropertyType, NodeItemKind, PropertyItemKind,
     };
 }
 

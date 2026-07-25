@@ -17,6 +17,7 @@ pub(crate) const TYP_FLOAT: &str = "Float";
 pub(crate) const TYP_DOUBLE: &str = "Double";
 pub(crate) const TYP_NODE_REF: &str = "NodeRef";
 pub(crate) const TYP_STRING: &str = "String";
+pub(crate) const TYP_ENUM: &str = "Enum";
 pub(crate) const QTY_MULTI: &str = "Multi";
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -164,6 +165,45 @@ pub(crate) fn property_binding(
             quote!(self.graph().resolve_string(v)),
             quote!(flatpg::property::PropertyType::String),
         ),
+        TYP_ENUM => {
+            let last_seg = typ
+                .path
+                .segments
+                .last()
+                .ok_or_else(|| Error::new_spanned(typ, "expected a non-empty `typ` path"))?;
+            let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments else {
+                return Err(Error::new_spanned(
+                    typ,
+                    "`Enum` typ requires a single generic argument naming the registered enum \
+                     type, e.g. `Enum<Status>`",
+                ));
+            };
+            let mut inner_types = args.args.iter().filter_map(|a| match a {
+                syn::GenericArgument::Type(t) => Some(t),
+                _ => None,
+            });
+            let (Some(inner_ty), None) = (inner_types.next(), inner_types.next()) else {
+                return Err(Error::new_spanned(
+                    typ,
+                    "`Enum` typ requires exactly one type argument, e.g. `Enum<Status>`",
+                ));
+            };
+            let enum_name = quote!(#inner_ty).to_string();
+            (
+                quote!(#inner_ty),
+                quote!(flatpg::storage::StoredProperty::Enum(v)),
+                quote! {
+                    if v.enum_property_index() == <#inner_ty as EnumPropertyIndex>::enum_property_index() {
+                        <#inner_ty as ItemFromIndex>::from_index(v.variant()).ok_or_else(|| {
+                            flatpg::error::Error::unresolved_enum_variant(#enum_name, v.variant())
+                        })
+                    } else {
+                        Err(flatpg::error::Error::enum_property_index_mismatch(#enum_name, v.enum_property_index()))
+                    }
+                },
+                quote!(flatpg::property::PropertyType::Enum),
+            )
+        }
         other => {
             return Err(Error::new_spanned(
                 typ,
@@ -357,6 +397,44 @@ mod tests {
         let m = find_trait_method(t, "owner").unwrap();
         let ret = return_type_string(&m.sig);
         assert!(ret.contains("NodeId"));
+    }
+
+    #[test]
+    fn enum_typed_property_one_quantity_returns_bare_enum() {
+        let input =
+            parse_enum(r#"enum P { #[property(typ = Enum<Status>, quantity = One)] State }"#);
+        let file = parse_output(property_traits_derive(&input));
+        let t = find_trait(&file, "State").unwrap();
+        let m = find_trait_method(t, "state").unwrap();
+        let ret = return_type_string(&m.sig);
+        assert!(ret.contains("Status"));
+        assert!(!ret.contains("Vec"));
+    }
+
+    #[test]
+    fn enum_typed_property_multi_quantity_returns_vec() {
+        let input =
+            parse_enum(r#"enum P { #[property(typ = Enum<Status>, quantity = Multi)] States }"#);
+        let file = parse_output(property_traits_derive(&input));
+        let t = find_trait(&file, "States").unwrap();
+        let m = find_trait_method(t, "states").unwrap();
+        let ret = return_type_string(&m.sig);
+        assert!(ret.contains("Vec"));
+        assert!(ret.contains("Status"));
+    }
+
+    #[test]
+    fn enum_typed_property_missing_generic_argument_errors() {
+        let input = parse_enum(r#"enum P { #[property(typ = Enum, quantity = One)] State }"#);
+        assert!(has_compile_error(property_traits_derive(&input)));
+    }
+
+    #[test]
+    fn enum_typed_property_multiple_generic_arguments_error() {
+        let input = parse_enum(
+            r#"enum P { #[property(typ = Enum<Status, Color>, quantity = One)] State }"#,
+        );
+        assert!(has_compile_error(property_traits_derive(&input)));
     }
 
     #[test]

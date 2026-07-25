@@ -5,8 +5,8 @@ use crate::error::Error;
 use crate::node::NodeRef;
 use crate::property::PropertyType;
 use crate::{
-    EdgeDirectionKind, EdgeItemKind, ItemAll, ItemAsStr, ItemFromIndex, ItemIndex,
-    ItemKindPropertyType, NodeItemKind, PropertyItemKind,
+    EdgeDirectionKind, EdgeItemKind, EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex,
+    ItemIndex, ItemKindPropertyType, NodeItemKind, PropertyItemKind,
 };
 
 // Constants
@@ -95,11 +95,13 @@ impl Display for PropertyStorageSlot {
 pub type NodeKind<S> = <S as Schema>::N;
 pub type EdgeKind<S> = <S as Schema>::E;
 pub type PropKind<S> = <S as Schema>::P;
+pub type EnumPropRegistry<S> = <S as Schema>::EPR;
 
 pub trait Schema: Sized + Clone + Copy {
     type N: NodeItemKind<Self::P>;
     type E: EdgeItemKind;
     type P: PropertyItemKind;
+    type EPR: EnumPropertyRegistry;
 
     /// Builds an [`EdgeRef`] from a source node, a destination node, a direction, and an edge handle.
     fn make_edge(
@@ -152,6 +154,11 @@ pub trait Schema: Sized + Clone + Copy {
         Self::P::all().len()
     }
 
+    /// Returns the number of registered enum kinds in the schema.
+    fn number_of_enum_kinds() -> usize {
+        Self::EPR::all().len()
+    }
+
     /// Returns the string name of a node kind.
     fn node_label(node_kind: Self::N) -> &'static str {
         node_kind.as_str()
@@ -165,6 +172,11 @@ pub trait Schema: Sized + Clone + Copy {
     /// Returns the string name of a property kind.
     fn property_label(property_kind: Self::P) -> &'static str {
         property_kind.as_str()
+    }
+
+    /// Returns the string name of an enum kind.
+    fn enum_label(enum_kind: Self::EPR) -> &'static str {
+        enum_kind.as_str()
     }
 
     /// Returns the node kind for the given index, or `None` if the index is out of range.
@@ -185,6 +197,11 @@ pub trait Schema: Sized + Clone + Copy {
     /// Returns the property kind for the given index, or `None` if the index is out of range.
     fn property_kind_by_index(index: usize) -> Option<Self::P> {
         Self::P::from_index(index)
+    }
+
+    /// Returns the enum kind for the given index, or `None` if the index is out of range.
+    fn enum_kind_by_index(index: usize) -> Option<Self::EPR> {
+        Self::EPR::from_index(index)
     }
 
     /// Returns the property type carried by edges of the given kind.
@@ -281,5 +298,10 @@ pub trait Schema: Sized + Clone + Copy {
     /// Returns all property kinds in the schema.
     fn property_kinds() -> &'static [Self::P] {
         Self::P::all()
+    }
+
+    /// Returns all registered enum kinds in the schema.
+    fn enum_kinds() -> &'static [Self::EPR] {
+        Self::EPR::all()
     }
 }

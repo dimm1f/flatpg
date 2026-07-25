@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     ItemIndex,
+    enum_property::EnumRef,
     error::Error,
     node::{NodeMeta, NodeRef},
     property::PropertyType,
@@ -23,6 +24,7 @@ pub enum StoredProperty {
     Double(f64),
     NodeRef(NodeRef),
     StringRef(StringRef),
+    Enum(EnumRef),
 }
 
 impl StoredProperty {
@@ -37,6 +39,7 @@ impl StoredProperty {
             StoredProperty::Double(_) => PropertyType::Double,
             StoredProperty::NodeRef(_) => PropertyType::NodeRef,
             StoredProperty::StringRef(_) => PropertyType::String,
+            StoredProperty::Enum(_) => PropertyType::Enum,
         }
     }
 }
@@ -52,6 +55,7 @@ pub enum StorageArray {
     Double(Vec<f64>),
     NodeRef(Vec<NodeRef>),
     StringRef(Vec<StringRef>),
+    Enum(Vec<EnumRef>),
     #[default]
     None,
 }
@@ -69,6 +73,7 @@ impl StorageArray {
             PropertyType::Double => Self::Double(Vec::new()),
             PropertyType::NodeRef => Self::NodeRef(Vec::new()),
             PropertyType::String => Self::StringRef(Vec::new()),
+            PropertyType::Enum => Self::Enum(Vec::new()),
         }
     }
 
@@ -83,6 +88,7 @@ impl StorageArray {
             StorageArray::Double(_) => PropertyType::Double,
             StorageArray::NodeRef(_) => PropertyType::NodeRef,
             StorageArray::StringRef(_) => PropertyType::String,
+            StorageArray::Enum(_) => PropertyType::Enum,
             StorageArray::None => PropertyType::None,
         }
     }
@@ -98,6 +104,7 @@ impl StorageArray {
             StorageArray::Double(v) => v.get(index).copied().map(StoredProperty::Double),
             StorageArray::NodeRef(v) => v.get(index).cloned().map(StoredProperty::NodeRef),
             StorageArray::StringRef(v) => v.get(index).cloned().map(StoredProperty::StringRef),
+            StorageArray::Enum(v) => v.get(index).copied().map(StoredProperty::Enum),
             StorageArray::None => None,
         }
     }
@@ -115,6 +122,7 @@ impl StorageArray {
             (StorageArray::Double(storage), StoredProperty::Double(v)) => storage.push(*v),
             (StorageArray::NodeRef(storage), StoredProperty::NodeRef(v)) => storage.push(*v),
             (StorageArray::StringRef(storage), StoredProperty::StringRef(v)) => storage.push(*v),
+            (StorageArray::Enum(storage), StoredProperty::Enum(v)) => storage.push(*v),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
         }
         Ok(())
@@ -133,6 +141,7 @@ impl StorageArray {
             (StorageArray::Double(storage), StorageArray::Double(v)) => storage.append(v),
             (StorageArray::NodeRef(storage), StorageArray::NodeRef(v)) => storage.append(v),
             (StorageArray::StringRef(storage), StorageArray::StringRef(v)) => storage.append(v),
+            (StorageArray::Enum(storage), StorageArray::Enum(v)) => storage.append(v),
             (StorageArray::None, StorageArray::None) => (),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
         }
@@ -154,6 +163,7 @@ impl StorageArray {
             (StorageArray::StringRef(storage), StoredProperty::StringRef(v)) => {
                 storage.insert(i, *v)
             }
+            (StorageArray::Enum(storage), StoredProperty::Enum(v)) => storage.insert(i, *v),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
         }
         Ok(())
@@ -188,6 +198,9 @@ impl StorageArray {
             StorageArray::StringRef(v) => {
                 v.drain(range);
             }
+            StorageArray::Enum(v) => {
+                v.drain(range);
+            }
             StorageArray::None => {}
         }
         Ok(())
@@ -204,6 +217,7 @@ impl StorageArray {
             StorageArray::Double(items) => items.len(),
             StorageArray::NodeRef(node_ref) => node_ref.len(),
             StorageArray::StringRef(items) => items.len(),
+            StorageArray::Enum(items) => items.len(),
             StorageArray::None => 1,
         }
     }
@@ -324,6 +338,20 @@ impl StorageArray {
         }
     }
 
+    pub fn try_as_enum(&self) -> Result<&Vec<EnumRef>, Error> {
+        match self {
+            Self::Enum(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::Enum)),
+        }
+    }
+
+    pub fn try_as_enum_mut(&mut self) -> Result<&mut Vec<EnumRef>, Error> {
+        match self {
+            Self::Enum(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::Enum)),
+        }
+    }
+
     pub fn try_as_string(&self) -> Result<&Vec<StringRef>, Error> {
         match self {
             Self::StringRef(items) => Ok(items),
@@ -398,6 +426,13 @@ impl StorageArray {
         match self {
             Self::StringRef(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::String)),
+        }
+    }
+
+    pub fn try_into_enum(self) -> Result<Vec<EnumRef>, Error> {
+        match self {
+            Self::Enum(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::Enum)),
         }
     }
 

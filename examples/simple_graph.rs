@@ -8,6 +8,19 @@ use flatpg::{
     schema::Schema,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumProperty)]
+enum Status {
+    Active,
+    Inactive,
+    Banned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumPropertyRegistry)]
+enum SimplePropEnumsRegistry {
+    #[enum_type(Status)]
+    Status,
+}
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
     #[property(typ = String, quantity = One)]
@@ -18,6 +31,8 @@ enum SimpleProperty {
     Count,
     #[property(typ = NodeRef, quantity = One)]
     Ref,
+    #[property(typ = Enum<Status>, quantity = One)]
+    State,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
@@ -27,7 +42,7 @@ enum SimpleNode {
     A,
     #[properties(Count)]
     B,
-    #[properties(Ref)]
+    #[properties(Ref, State)]
     C,
 }
 
@@ -47,6 +62,7 @@ impl Schema for SimpleSchema {
     type N = SimpleNode;
     type E = SimpleEdge;
     type P = SimpleProperty;
+    type EPR = SimplePropEnumsRegistry;
 }
 
 struct SimpleGraph<'a>(&'a Graph<SimpleSchema>);
@@ -127,6 +143,8 @@ fn main() {
         builders::CNodeBuilder::new()
             .add_property(SimpleProperty::Ref, a_ref)
             .unwrap()
+            .add_property(SimpleProperty::State, Status::Active)
+            .unwrap()
             .build(),
     );
     // Edges can also connect a new node to one already in the graph, and
@@ -156,8 +174,11 @@ fn main() {
     let Some(Node::C(c)) = view.nodes_by_kind(SimpleNode::C).next() else {
         panic!("expected Node::C");
     };
+    // `ref` is a Rust keyword, so the generated accessor for the `Ref` property
+    // is escaped as a raw identifier.
     assert_eq!(c.r#ref().unwrap().kind(), SimpleNode::A);
     assert_eq!(c.r#ref().unwrap().seq(), a_node.seq());
+    assert_eq!(c.state().unwrap(), Status::Active);
 
     assert_eq!(view.nodes_by_kind_with_deleted(SimpleNode::A).count(), 1);
 

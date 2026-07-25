@@ -49,6 +49,7 @@ impl<S: Schema> Graph<S> {
             StoredProperty::StringRef(str_ref) => {
                 PropertyValue::String(self.resolve_string(str_ref)?.to_owned())
             }
+            StoredProperty::Enum(v) => PropertyValue::Enum(v),
         })
     }
 
@@ -768,5 +769,6 @@ fn to_stored_property(prop: &PropertyValue, strings: &mut StringsPool) -> Stored
         PropertyValue::Double(v) => StoredProperty::Double(*v),
         PropertyValue::NodeRef(node_ref) => StoredProperty::NodeRef(*node_ref),
         PropertyValue::String(s) => StoredProperty::StringRef(strings.intern(s)),
+        PropertyValue::Enum(v) => StoredProperty::Enum(*v),
     }
 }

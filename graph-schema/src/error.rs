@@ -64,6 +64,12 @@ pub enum Error {
     },
     #[error("failed to resolve string ref \"{0}\"")]
     UnresolvedStringRef(String),
+    #[error("failed to resolve variant {variant} for enum \"{enum_name}\"")]
+    UnresolvedEnumVariant { enum_name: String, variant: usize },
+    #[error(
+        "enum property index mismatch: value belongs to a different registered enum than \"{expected}\" (found enum index {found})"
+    )]
+    EnumPropIndexMismatch { expected: String, found: usize },
 }
 
 impl Error {
@@ -163,5 +169,19 @@ impl Error {
 
     pub fn unresolved_string_ref(str_ref: impl Into<String>) -> Self {
         Self::UnresolvedStringRef(str_ref.into())
+    }
+
+    pub fn unresolved_enum_variant(enum_name: impl Into<String>, variant: usize) -> Self {
+        Self::UnresolvedEnumVariant {
+            enum_name: enum_name.into(),
+            variant,
+        }
+    }
+
+    pub fn enum_property_index_mismatch(expected: impl Into<String>, found: usize) -> Self {
+        Self::EnumPropIndexMismatch {
+            expected: expected.into(),
+            found,
+        }
     }
 }

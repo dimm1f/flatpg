@@ -3,6 +3,8 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Attribute, Error, ItemEnum, LitStr, TypePath, Variant, parse2, punctuated::Punctuated};
 
+use crate::common::typ_last_segment_name;
+
 pub(crate) const PROPERTY_ATTR: &str = "property";
 const PROPERTY_TYPE_KEY: &str = "typ";
 const PROPERTY_QTY_KEY: &str = "quantity";
@@ -212,28 +214,36 @@ where
     Error::new_spanned(span, msg)
 }
 
+struct PropertyAttrArg {
+    path: syn::Path,
+    value: TypePath,
+}
+
+impl syn::parse::Parse for PropertyAttrArg {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let path = input.parse()?;
+        input.parse::<syn::Token![=]>()?;
+        let value = input.parse()?;
+        Ok(Self { path, value })
+    }
+}
+
 pub(crate) fn parse_property_attr(
     attr: &Attribute,
     variant: &Ident,
 ) -> Result<PropertyItemAttrs, Error> {
     let prefs =
-        attr.parse_args_with(Punctuated::<syn::MetaNameValue, syn::Token![,]>::parse_terminated)?;
+        attr.parse_args_with(Punctuated::<PropertyAttrArg, syn::Token![,]>::parse_terminated)?;
 
-    let prop_typ: Option<TypePath> = prefs
+    let prop_typ = prefs
         .iter()
-        .filter(|m| m.path.is_ident(PROPERTY_TYPE_KEY))
-        .map(|m| m.value.to_token_stream())
-        .next()
-        .map(parse2)
-        .transpose()?;
+        .find(|m| m.path.is_ident(PROPERTY_TYPE_KEY))
+        .map(|m| m.value.clone());
 
-    let prop_qty: Option<TypePath> = prefs
+    let prop_qty = prefs
         .iter()
-        .filter(|m| m.path.is_ident(PROPERTY_QTY_KEY))
-        .map(|m| m.value.to_token_stream())
-        .next()
-        .map(parse2)
-        .transpose()?;
+        .find(|m| m.path.is_ident(PROPERTY_QTY_KEY))
+        .map(|m| m.value.clone());
 
     Ok(PropertyItemAttrs {
         prop_typ,
@@ -277,7 +287,12 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
                 .prop_typ
                 .as_ref()
                 .ok_or_else(|| absent_attribute_error(variant, has_qty))?;
-            let typ = quote! {#ident::#variant => flatpg::property::PropertyType::#typ};
+            // Only the last path segment's identifier names a `PropertyType` variant — a generic
+            // argument like `Enum<Status>`'s `<Status>` is not part of `PropertyType` itself and
+            // must be dropped here (it's unpacked separately by `property_binding`'s `Enum` arm).
+            let typ_name = typ_last_segment_name(typ)?;
+            let typ_ident = format_ident!("{}", typ_name);
+            let typ = quote! {#ident::#variant => flatpg::property::PropertyType::#typ_ident};
 
             let qty = if has_qty {
                 let prop_qty = attr
@@ -345,6 +360,49 @@ mod tests {
             let Item::Const(c) = item else { return None };
             (c.ident == ident).then_some(c)
         })
+    }
+
+    #[test]
+    fn parse_property_attr_accepts_generic_enum_type() {
+        let input = parse_enum(r#"enum P { #[property(typ = Enum<Status>, quantity = One)] X }"#);
+        let variant = &input.variants[0];
+        let attr = find_attribute(PROPERTY_ATTR, &variant.attrs).unwrap();
+        let attrs = parse_property_attr(attr, &variant.ident).unwrap();
+
+        let typ = attrs.prop_typ.expect("typ should be present");
+        let last_seg = typ.path.segments.last().expect("non-empty path");
+        assert_eq!(last_seg.ident, "Enum");
+        let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments else {
+            panic!("expected angle-bracketed generic argument on `Enum<Status>`");
+        };
+        assert_eq!(args.args.len(), 1);
+        let syn::GenericArgument::Type(syn::Type::Path(inner)) = &args.args[0] else {
+            panic!("expected a type generic argument");
+        };
+        assert!(inner.path.is_ident("Status"));
+    }
+
+    #[test]
+    fn parse_property_attr_plain_ident_unchanged() {
+        let input = parse_enum(r#"enum P { #[property(typ = Int, quantity = One)] X }"#);
+        let variant = &input.variants[0];
+        let attr = find_attribute(PROPERTY_ATTR, &variant.attrs).unwrap();
+        let attrs = parse_property_attr(attr, &variant.ident).unwrap();
+
+        assert!(
+            attrs
+                .prop_typ
+                .expect("typ should be present")
+                .path
+                .is_ident("Int")
+        );
+        assert!(
+            attrs
+                .prop_qty
+                .expect("quantity should be present")
+                .path
+                .is_ident("One")
+        );
     }
 
     fn assoc_type_last_segment(impl_block: &syn::ItemImpl, name: &str) -> Option<String> {

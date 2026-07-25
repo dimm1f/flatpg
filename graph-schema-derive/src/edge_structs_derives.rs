@@ -470,6 +470,18 @@ mod tests {
     }
 
     #[test]
+    fn property_method_generated_for_enum_typed_variant() {
+        let input = parse_enum(r#"enum E { #[property(typ = Enum<Status>)] Tagged }"#);
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+
+        let tagged =
+            find_method(find_inherent_impl(&file, "TaggedEdge").unwrap(), "property").unwrap();
+        let tagged_ret = return_type_string(&tagged.sig);
+        assert!(tagged_ret.contains("Status"));
+    }
+
+    #[test]
     fn edge_has_no_property_method() {
         let input = parse_enum(
             r#"enum E {

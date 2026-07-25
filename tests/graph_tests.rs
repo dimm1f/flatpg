@@ -9,6 +9,19 @@ use flatpg::{
     storage::StoredProperty,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumProperty)]
+enum Status {
+    Active,
+    Inactive,
+    Banned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumPropertyRegistry)]
+enum TestPropEnumsRegistry {
+    #[enum_type(Status)]
+    Status,
+}
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum TestProperty {
     #[property(typ = String, quantity = One)]
@@ -17,12 +30,14 @@ enum TestProperty {
     Values,
     #[property(typ = Int, quantity = One)]
     Count,
+    #[property(typ = Enum<Status>, quantity = One)]
+    State,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
 #[node_kind(schema = TestSchema, property_kind = TestProperty)]
 enum TestNode {
-    #[properties(Key, Values)]
+    #[properties(Key, Values, State)]
     A,
     #[properties(Count)]
     B,
@@ -44,6 +59,7 @@ impl Schema for TestSchema {
     type N = TestNode;
     type E = TestEdge;
     type P = TestProperty;
+    type EPR = TestPropEnumsRegistry;
 }
 
 fn string_value(graph: &Graph<TestSchema>, prop: StoredProperty) -> String {
@@ -277,6 +293,24 @@ fn add_single_node_to_empty_graph() {
 
     assert_eq!(graph.node_count_by_kind(TestNode::A), 1);
     assert_eq!(ANode::new(&graph, 0).key().unwrap(), "main.rs");
+}
+
+#[test]
+fn add_node_with_enum_property_round_trips() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.add_node(
+        builders::ANodeBuilder::new()
+            .add_property(TestProperty::Key, "main.rs".to_string())
+            .unwrap()
+            .add_property(TestProperty::State, Status::Banned)
+            .unwrap()
+            .build(),
+    );
+
+    let graph = diff.apply(Graph::new()).expect("apply diff");
+
+    assert_eq!(graph.node_count_by_kind(TestNode::A), 1);
+    assert_eq!(ANode::new(&graph, 0).state().unwrap(), Status::Banned);
 }
 
 #[test]

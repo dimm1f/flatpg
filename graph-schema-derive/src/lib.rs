@@ -3,6 +3,7 @@ extern crate proc_macro;
 mod common;
 mod edge_structs_derives;
 mod enum_derives;
+mod enum_property_registry_derives;
 mod node_structs_derives;
 mod property_trait_derives;
 
@@ -106,6 +107,55 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
         #edge_structs
 
         impl EdgeItemKind for #name {}
+    }
+    .into()
+}
+
+#[proc_macro_derive(EnumProperty)]
+pub fn enum_property_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemEnum);
+    let ident = &input.ident;
+
+    let enum_item_all = enum_derives::enum_item_all_derive(&input);
+    let enum_item_from_index = enum_derives::enum_item_from_index_derive(&input);
+    let enum_item_index = enum_derives::enum_item_index_derive(&input);
+    let enum_item_as_str = enum_derives::enum_item_as_str_derive(&input);
+    let enum_item_from_str = enum_derives::enum_item_from_str_derive(&input);
+
+    quote! {
+        #enum_item_all
+        #enum_item_from_index
+        #enum_item_index
+        #enum_item_as_str
+        #enum_item_from_str
+
+        impl EnumProperty for #ident {}
+    }
+    .into()
+}
+
+#[proc_macro_derive(EnumPropertyRegistry, attributes(enum_type))]
+pub fn enum_property_registry_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemEnum);
+    let ident = &input.ident;
+
+    let enum_item_all = enum_derives::enum_item_all_derive(&input);
+    let enum_item_from_index = enum_derives::enum_item_from_index_derive(&input);
+    let enum_item_index = enum_derives::enum_item_index_derive(&input);
+    let enum_item_as_str = enum_derives::enum_item_as_str_derive(&input);
+    let enum_item_from_str = enum_derives::enum_item_from_str_derive(&input);
+    let enum_property_registry_impls =
+        enum_property_registry_derives::enum_property_registry_derive(&input);
+
+    quote! {
+        #enum_item_all
+        #enum_item_from_index
+        #enum_item_index
+        #enum_item_as_str
+        #enum_item_from_str
+        #enum_property_registry_impls
+
+        impl EnumPropertyRegistry for #ident {}
     }
     .into()
 }

@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::{error::Error, node::NodeRef};
+use crate::{EnumPropertyIndex, enum_property::EnumRef, error::Error, node::NodeRef};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QuantityType {
@@ -21,6 +21,7 @@ pub enum PropertyType {
     Double,
     NodeRef,
     String,
+    Enum,
 }
 
 impl fmt::Display for PropertyType {
@@ -36,6 +37,7 @@ impl fmt::Display for PropertyType {
             Self::Double => "Double",
             Self::NodeRef => "NodeRef",
             Self::String => "String",
+            Self::Enum => "Enum",
         };
         write!(f, "{}", name)
     }
@@ -52,6 +54,7 @@ pub enum PropertyValue {
     Double(f64),
     NodeRef(NodeRef),
     String(String),
+    Enum(EnumRef),
 }
 
 impl PropertyValue {
@@ -66,6 +69,7 @@ impl PropertyValue {
             PropertyValue::Double(_) => PropertyType::Double,
             PropertyValue::NodeRef(_) => PropertyType::NodeRef,
             PropertyValue::String(_) => PropertyType::String,
+            PropertyValue::Enum(_) => PropertyType::Enum,
         }
     }
 }
@@ -115,6 +119,13 @@ impl From<f64> for PropertyValue {
 impl From<NodeRef> for PropertyValue {
     fn from(value: NodeRef) -> Self {
         Self::NodeRef(value)
+    }
+}
+
+impl<T: EnumPropertyIndex> From<T> for PropertyValue {
+    fn from(value: T) -> Self {
+        let variant = value.index();
+        PropertyValue::Enum(EnumRef::new(T::enum_property_index(), variant))
     }
 }
 
