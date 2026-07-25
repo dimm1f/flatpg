@@ -5,6 +5,7 @@ mod edge_structs_derives;
 mod enum_derives;
 mod enum_property_registry_derives;
 mod enum_property_registry_macro;
+mod graph_view_derives;
 mod node_structs_derives;
 mod property_trait_derives;
 
@@ -63,6 +64,8 @@ pub fn node_kind_derive(input: TokenStream) -> TokenStream {
             .unwrap_or_else(Error::into_compile_error);
     let node_structs = node_structs_derives::node_structs_derive(&input, &config)
         .unwrap_or_else(Error::into_compile_error);
+    let node_accessor_traits = graph_view_derives::node_accessor_traits_derive(&input, &config)
+        .unwrap_or_else(Error::into_compile_error);
 
     let schema_ty = config.schema;
     quote! {
@@ -73,6 +76,7 @@ pub fn node_kind_derive(input: TokenStream) -> TokenStream {
         #enum_item_from_str
         #available_properties
         #node_structs
+        #node_accessor_traits
 
         impl #impl_generics NodeItemKind<flatpg::schema::PropKind<#schema_ty>> for #ident #ty_generics #where_clause {}
     }
@@ -97,6 +101,7 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
     let enum_item_property_type = enum_derives::item_kind_property_type_derive(&input, false);
     let edge_structs = edge_structs_derives::edge_structs_derive(&input, &config)
         .unwrap_or_else(Error::into_compile_error);
+    let edges_accessor = graph_view_derives::edges_accessor_trait_derive(&input, &config);
 
     quote! {
         #enum_item_all
@@ -106,6 +111,7 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
         #enum_item_from_str
         #enum_item_property_type
         #edge_structs
+        #edges_accessor
 
         impl EdgeItemKind for #name {}
     }

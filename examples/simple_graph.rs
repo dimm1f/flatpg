@@ -1,8 +1,7 @@
 use flatpg::{
     edge::{Direction, StoredEdge},
-    error::Error,
     graph::{Graph, GraphDiff},
-    node::{NodeId, NodeRef},
+    node::NodeRef,
     prelude::*,
     property::PropertyValue,
     schema::Schema,
@@ -61,51 +60,6 @@ impl Schema for SimpleSchema {
     type EPR = SimplePropEnumsRegistry;
 }
 
-struct SimpleGraph<'a>(&'a Graph<SimpleSchema>);
-
-impl<'a> SimpleGraph<'a> {
-    fn new(graph: &'a Graph<SimpleSchema>) -> Self {
-        Self(graph)
-    }
-
-    fn nodes_by_kind(&self, kind: SimpleNode) -> impl Iterator<Item = Node<'a>> + 'a {
-        let graph = self.0;
-        graph
-            .nodes_by_kind(kind)
-            .map(move |node| Node::new(graph, node.kind(), node.seq()))
-    }
-
-    fn nodes_by_kind_with_deleted(&self, kind: SimpleNode) -> impl Iterator<Item = Node<'a>> + 'a {
-        let graph = self.0;
-        graph
-            .nodes_by_kind_with_deleted(kind)
-            .map(move |node| Node::new(graph, node.kind(), node.seq()))
-    }
-
-    fn get_edges(
-        &self,
-        src_node: NodeId<SimpleSchema>,
-        edge_kind: SimpleEdge,
-        direction: Direction,
-    ) -> Result<Vec<Edge<'a>>, Error> {
-        let graph = self.0;
-        Ok(graph
-            .get_edges(src_node, edge_kind, direction)?
-            .into_iter()
-            .map(|edge| {
-                Edge::new(
-                    graph,
-                    edge.kind(),
-                    edge.src_node(),
-                    edge.dst_node(),
-                    edge.direction(),
-                    edge.seq(),
-                )
-            })
-            .collect())
-    }
-}
-
 fn main() {
     let mut diff = GraphDiff::<SimpleSchema>::default();
     let a_id = diff.add_node(
@@ -154,20 +108,18 @@ fn main() {
 
     let graph = diff.apply(graph).expect("apply diff 2");
 
-    let view = SimpleGraph::new(&graph);
-
-    let Some(Node::A(a)) = view.nodes_by_kind(SimpleNode::A).next() else {
+    let Some(Node::A(a)) = graph.a().next() else {
         panic!("expected Node::A");
     };
     assert_eq!(a.key().unwrap(), "hello");
     assert_eq!(a.values().unwrap(), vec!["v1", "v2"]);
 
-    let Some(Node::B(b)) = view.nodes_by_kind(SimpleNode::B).next() else {
+    let Some(Node::B(b)) = graph.b().next() else {
         panic!("expected Node::B");
     };
     assert_eq!(b.count().unwrap(), 42);
 
-    let Some(Node::C(c)) = view.nodes_by_kind(SimpleNode::C).next() else {
+    let Some(Node::C(c)) = graph.c().next() else {
         panic!("expected Node::C");
     };
     // `ref` is a Rust keyword, so the generated accessor for the `Ref` property
@@ -176,10 +128,10 @@ fn main() {
     assert_eq!(c.r#ref().unwrap().seq(), a_node.seq());
     assert_eq!(c.state().unwrap(), Status::Active);
 
-    assert_eq!(view.nodes_by_kind_with_deleted(SimpleNode::A).count(), 1);
+    assert_eq!(graph.nodes_by_kind_with_deleted(SimpleNode::A).count(), 1);
 
-    let base_edges = view
-        .get_edges(a_node, SimpleEdge::Base, Direction::Out)
+    let base_edges = graph
+        .edges(a_node, SimpleEdge::Base, Direction::Out)
         .expect("a's outgoing Base Edges");
     let [Edge::Base(base)] = base_edges.as_slice() else {
         panic!("expected exactly one Edge::Base");
@@ -191,8 +143,8 @@ fn main() {
     assert_eq!(base.dst_node().seq(), b_node.seq());
     assert_eq!(base.direction(), Direction::Out);
 
-    let extended_edges = view
-        .get_edges(a_node, SimpleEdge::Extended, Direction::In)
+    let extended_edges = graph
+        .edges(a_node, SimpleEdge::Extended, Direction::In)
         .expect("a's incoming Extended Edges");
     let [Edge::Extended(extended)] = extended_edges.as_slice() else {
         panic!("expected exactly one Edge::Extended");

@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Error, Ident, ItemEnum, Variant};
 
-use crate::common::typ_last_segment_name;
+use crate::common::{method_ident, typ_last_segment_name};
 use crate::enum_derives::{
     PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
 };
@@ -19,55 +19,6 @@ pub(crate) const TYP_NODE_REF: &str = "NodeRef";
 pub(crate) const TYP_STRING: &str = "String";
 pub(crate) const TYP_ENUM: &str = "Enum";
 pub(crate) const QTY_MULTI: &str = "Multi";
-
-const RUST_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
-    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
-    "ref", "return", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
-    "where", "while", "abstract", "become", "box", "do", "final", "macro", "override", "priv",
-    "typeof", "unsized", "virtual", "yield", "try",
-];
-
-fn is_rust_keyword(s: &str) -> bool {
-    RUST_KEYWORDS.contains(&s)
-}
-
-/// Converts a PascalCase identifier (an enum variant) into a snake_case string
-/// suitable for a method name, e.g. `FullName` -> `full_name`, `HTTPServer` ->
-/// `http_server`.
-fn to_snake_case(input: &str) -> String {
-    let chars: Vec<char> = input.chars().collect();
-    let mut out = String::with_capacity(input.len() + 4);
-    for (i, &ch) in chars.iter().enumerate() {
-        if ch.is_ascii_uppercase() {
-            let prev_lower_or_digit =
-                i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
-            let prev_upper_next_lower = i > 0
-                && chars[i - 1].is_ascii_uppercase()
-                && i + 1 < chars.len()
-                && chars[i + 1].is_ascii_lowercase();
-            if i > 0 && (prev_lower_or_digit || prev_upper_next_lower) {
-                out.push('_');
-            }
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
-/// Builds the accessor method identifier for a variant, escaping the (rare)
-/// case where the snake_case form collides with a reserved Rust keyword
-/// (e.g. variant `Ref` -> method `r#ref`) via a raw identifier.
-fn method_ident(variant: &Ident) -> Ident {
-    let snake = to_snake_case(&variant.to_string());
-    if is_rust_keyword(&snake) {
-        Ident::new_raw(&snake, variant.span())
-    } else {
-        Ident::new(&snake, variant.span())
-    }
-}
 
 pub fn property_traits_derive(input: &ItemEnum) -> TokenStream {
     let enum_ident = &input.ident;
@@ -339,15 +290,6 @@ mod tests {
             };
             (f.sig.ident == name).then_some(f)
         })
-    }
-
-    #[test]
-    fn to_snake_case_basic() {
-        assert_eq!(to_snake_case("FullName"), "full_name");
-        assert_eq!(to_snake_case("Key"), "key");
-        assert_eq!(to_snake_case("Ref"), "ref");
-        assert_eq!(to_snake_case("HTTPServer"), "http_server");
-        assert_eq!(to_snake_case("File01"), "file01");
     }
 
     #[test]

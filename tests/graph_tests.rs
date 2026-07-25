@@ -397,6 +397,34 @@ fn apply_incremental_to_existing_graph() {
 }
 
 #[test]
+fn apply_accepts_any_graph_view_implementor() {
+    struct TestGraphWrapper(Graph<TestSchema>);
+
+    impl GraphView<TestSchema> for TestGraphWrapper {
+        fn graph(&self) -> &Graph<TestSchema> {
+            &self.0
+        }
+
+        fn into_graph(self) -> Graph<TestSchema> {
+            self.0
+        }
+    }
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.add_node(
+        builders::ANodeBuilder::new()
+            .add_property(TestProperty::Key, "wrapped.rs".to_string())
+            .unwrap()
+            .build(),
+    );
+    let graph = diff
+        .apply(TestGraphWrapper(Graph::new()))
+        .expect("apply via GraphView wrapper");
+    assert_eq!(graph.node_count_by_kind(TestNode::A), 1);
+    assert_eq!(ANode::new(&graph, 0).key().unwrap(), "wrapped.rs");
+}
+
+#[test]
 fn add_node_with_multi_valued_property_stores_all_values() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.add_node(

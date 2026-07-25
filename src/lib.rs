@@ -18,6 +18,8 @@ pub mod prelude {
         EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex, ItemFromStr, ItemIndex,
         ItemKindPropertyType, NodeItemKind, PropertyItemKind,
     };
+
+    pub use graph_schema::graph::GraphView;
 }
 
 pub use graph_schema::{edge, error, graph, node, property, schema, storage};

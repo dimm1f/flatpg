@@ -229,6 +229,25 @@ impl<S: Schema> Default for Graph<S> {
     }
 }
 
+pub trait GraphView<S: Schema> {
+    fn graph(&self) -> &Graph<S>;
+
+    /// Consumes this view, returning the [`Graph<S>`] it owns or wraps.
+    fn into_graph(self) -> Graph<S>
+    where
+        Self: Sized;
+}
+
+impl<S: Schema> GraphView<S> for Graph<S> {
+    fn graph(&self) -> &Graph<S> {
+        self
+    }
+
+    fn into_graph(self) -> Graph<S> {
+        self
+    }
+}
+
 type NewEdgeId = usize;
 
 struct HalfEdge<S: Schema> {
@@ -380,7 +399,8 @@ impl<S: Schema> GraphDiff<S> {
         self.changes.len() - 1
     }
 
-    pub fn apply(self, mut graph: Graph<S>) -> Result<Graph<S>, Error> {
+    pub fn apply(self, graph: impl GraphView<S>) -> Result<Graph<S>, Error> {
+        let mut graph = graph.into_graph();
         self.apply_changes(&mut graph)?;
 
         // Note: `node_remapper` must contain nodes with actual NodeSeq.
