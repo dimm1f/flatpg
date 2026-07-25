@@ -10,7 +10,7 @@ pub mod prelude {
 
     pub use graph_schema_derive::{
         EdgeItemKind, EnumProperty, EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex,
-        ItemFromStr, ItemIndex, NodeItemKind, PropertyItemKind,
+        ItemFromStr, ItemIndex, NodeItemKind, PropertyItemKind, enum_property_registry,
     };
 
     pub use graph_schema::{

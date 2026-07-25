@@ -15,11 +15,7 @@ enum Status {
     Banned,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumPropertyRegistry)]
-enum SimplePropEnumsRegistry {
-    #[enum_type(Status)]
-    Status,
-}
+enum_property_registry!(SimplePropEnumsRegistry: Status);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {

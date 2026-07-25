@@ -4,6 +4,7 @@ mod common;
 mod edge_structs_derives;
 mod enum_derives;
 mod enum_property_registry_derives;
+mod enum_property_registry_macro;
 mod node_structs_derives;
 mod property_trait_derives;
 
@@ -158,6 +159,12 @@ pub fn enum_property_registry_derive(input: TokenStream) -> TokenStream {
         impl EnumPropertyRegistry for #ident {}
     }
     .into()
+}
+
+#[proc_macro]
+pub fn enum_property_registry(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as enum_property_registry_macro::RegistryDef);
+    enum_property_registry_macro::expand(input).into()
 }
 
 #[proc_macro_derive(PropertyItemKind, attributes(property_kind, property))]
