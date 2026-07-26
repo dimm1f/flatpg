@@ -4,7 +4,6 @@ use flatpg::{
     node::NodeRef,
     prelude::*,
     property::PropertyValue,
-    schema::Schema,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumProperty)]
@@ -50,15 +49,7 @@ enum SimpleEdge {
     Extended,
 }
 
-#[derive(Clone, Copy, Default)]
-struct SimpleSchema;
-
-impl Schema for SimpleSchema {
-    type N = SimpleNode;
-    type E = SimpleEdge;
-    type P = SimpleProperty;
-    type EPR = SimplePropEnumsRegistry;
-}
+schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsRegistry);
 
 fn main() {
     let mut diff = GraphDiff::<SimpleSchema>::default();

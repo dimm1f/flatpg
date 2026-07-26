@@ -10,7 +10,7 @@ pub mod prelude {
 
     pub use graph_schema_derive::{
         EdgeItemKind, EnumProperty, EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex,
-        ItemFromStr, ItemIndex, NodeItemKind, PropertyItemKind, enum_property_registry,
+        ItemFromStr, ItemIndex, NodeItemKind, PropertyItemKind, enum_property_registry, schema,
     };
 
     pub use graph_schema::{
@@ -22,4 +22,4 @@ pub mod prelude {
     pub use graph_schema::graph::GraphView;
 }
 
-pub use graph_schema::{edge, error, graph, node, property, schema, storage};
+pub use graph_schema::{edge, enum_property, error, graph, node, property, schema, storage};

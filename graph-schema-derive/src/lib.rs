@@ -8,6 +8,7 @@ mod enum_property_registry_macro;
 mod graph_view_derives;
 mod node_structs_derives;
 mod property_trait_derives;
+mod schema_macro;
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -171,6 +172,12 @@ pub fn enum_property_registry_derive(input: TokenStream) -> TokenStream {
 pub fn enum_property_registry(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as enum_property_registry_macro::RegistryDef);
     enum_property_registry_macro::expand(input).into()
+}
+
+#[proc_macro]
+pub fn schema(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as schema_macro::SchemaDef);
+    schema_macro::expand(input).into()
 }
 
 #[proc_macro_derive(PropertyItemKind, attributes(property_kind, property))]
