@@ -33,11 +33,11 @@ enum SimpleProperty {
 #[node_kind(schema = SimpleSchema, property_kind = SimpleProperty)]
 enum SimpleNode {
     #[properties(Key, Values)]
-    A,
+    Alpha,
     #[properties(Count)]
-    B,
+    Beta,
     #[properties(Ref, State)]
-    C,
+    Gamma,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
@@ -53,8 +53,8 @@ schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsReg
 
 fn main() {
     let mut diff = GraphDiff::<SimpleSchema>::default();
-    let a_id = diff.add_node(
-        builders::ANodeBuilder::new()
+    let alpha_id = diff.add_node(
+        builders::AlphaNodeBuilder::new()
             .add_property(SimpleProperty::Key, "hello".to_string())
             .unwrap()
             .add_property(SimpleProperty::Values, "v1".to_string())
@@ -63,26 +63,32 @@ fn main() {
             .unwrap()
             .build(),
     );
-    let b_id = diff.add_node(
-        builders::BNodeBuilder::new()
+    let beta_id = diff.add_node(
+        builders::BetaNodeBuilder::new()
             .add_property(SimpleProperty::Count, 42i32)
             .unwrap()
             .build(),
     );
-    diff.add_edge(a_id, b_id, SimpleEdge::Base, None);
+    diff.add_edge(alpha_id, beta_id, SimpleEdge::Base, None);
 
     let graph = diff
         .apply(Graph::<SimpleSchema>::new())
         .expect("apply diff 1");
 
-    let a_node = graph.nodes_by_kind(SimpleNode::A).next().expect("A node");
-    let b_node = graph.nodes_by_kind(SimpleNode::B).next().expect("B node");
-    let a_ref = NodeRef::from(&a_node);
+    let alpha_node = graph
+        .nodes_by_kind(SimpleNode::Alpha)
+        .next()
+        .expect("Alpha node");
+    let beta_node = graph
+        .nodes_by_kind(SimpleNode::Beta)
+        .next()
+        .expect("Beta node");
+    let alpha_ref = NodeRef::from(&alpha_node);
 
     let mut diff = GraphDiff::<SimpleSchema>::default();
-    let c_id = diff.add_node(
-        builders::CNodeBuilder::new()
-            .add_property(SimpleProperty::Ref, a_ref)
+    let gamma_id = diff.add_node(
+        builders::GammaNodeBuilder::new()
+            .add_property(SimpleProperty::Ref, alpha_ref)
             .unwrap()
             .add_property(SimpleProperty::State, Status::Active)
             .unwrap()
@@ -91,56 +97,59 @@ fn main() {
     // Edges can also connect a new node to one already in the graph, and
     // carry a property (SimpleEdge::Extended has `typ = String`).
     diff.add_edge(
-        c_id,
-        a_ref,
+        gamma_id,
+        alpha_ref,
         SimpleEdge::Extended,
         Some(PropertyValue::String("refers-to".to_string())),
     );
 
     let graph = diff.apply(graph).expect("apply diff 2");
 
-    let Some(Node::A(a)) = graph.a().next() else {
-        panic!("expected Node::A");
+    let Some(Node::Alpha(alpha)) = graph.alpha().next() else {
+        panic!("expected Node::Alpha");
     };
-    assert_eq!(a.key().unwrap(), "hello");
-    assert_eq!(a.values().unwrap(), vec!["v1", "v2"]);
+    assert_eq!(alpha.key().unwrap(), "hello");
+    assert_eq!(alpha.values().unwrap(), vec!["v1", "v2"]);
 
-    let Some(Node::B(b)) = graph.b().next() else {
-        panic!("expected Node::B");
+    let Some(Node::Beta(beta)) = graph.beta().next() else {
+        panic!("expected Node::Beta");
     };
-    assert_eq!(b.count().unwrap(), 42);
+    assert_eq!(beta.count().unwrap(), 42);
 
-    let Some(Node::C(c)) = graph.c().next() else {
-        panic!("expected Node::C");
+    let Some(Node::Gamma(gamma)) = graph.gamma().next() else {
+        panic!("expected Node::Gamma");
     };
     // `ref` is a Rust keyword, so the generated accessor for the `Ref` property
     // is escaped as a raw identifier.
-    assert_eq!(c.r#ref().unwrap().kind(), SimpleNode::A);
-    assert_eq!(c.r#ref().unwrap().seq(), a_node.seq());
-    assert_eq!(c.state().unwrap(), Status::Active);
+    assert_eq!(gamma.r#ref().unwrap().kind(), SimpleNode::Alpha);
+    assert_eq!(gamma.r#ref().unwrap().seq(), alpha_node.seq());
+    assert_eq!(gamma.state().unwrap(), Status::Active);
 
-    assert_eq!(graph.nodes_by_kind_with_deleted(SimpleNode::A).count(), 1);
+    assert_eq!(
+        graph.nodes_by_kind_with_deleted(SimpleNode::Alpha).count(),
+        1
+    );
 
     let base_edges = graph
-        .edges(a_node, SimpleEdge::Base, Direction::Out)
-        .expect("a's outgoing Base Edges");
+        .edges(alpha_node, SimpleEdge::Base, Direction::Out)
+        .expect("alpha's outgoing Base Edges");
     let [Edge::Base(base)] = base_edges.as_slice() else {
         panic!("expected exactly one Edge::Base");
     };
     assert_eq!(base.kind(), SimpleEdge::Base);
-    assert_eq!(base.src_node().kind(), SimpleNode::A);
-    assert_eq!(base.src_node().seq(), a_node.seq());
-    assert_eq!(base.dst_node().kind(), SimpleNode::B);
-    assert_eq!(base.dst_node().seq(), b_node.seq());
+    assert_eq!(base.src_node().kind(), SimpleNode::Alpha);
+    assert_eq!(base.src_node().seq(), alpha_node.seq());
+    assert_eq!(base.dst_node().kind(), SimpleNode::Beta);
+    assert_eq!(base.dst_node().seq(), beta_node.seq());
     assert_eq!(base.direction(), Direction::Out);
 
     let extended_edges = graph
-        .edges(a_node, SimpleEdge::Extended, Direction::In)
-        .expect("a's incoming Extended Edges");
+        .edges(alpha_node, SimpleEdge::Extended, Direction::In)
+        .expect("alpha's incoming Extended Edges");
     let [Edge::Extended(extended)] = extended_edges.as_slice() else {
         panic!("expected exactly one Edge::Extended");
     };
-    assert_eq!(extended.src_node().kind(), SimpleNode::C);
+    assert_eq!(extended.src_node().kind(), SimpleNode::Gamma);
     let edge_property = extended
         .property()
         .expect("edge property lookup")
