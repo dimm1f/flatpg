@@ -1,7 +1,10 @@
 use flatpg::{
     edge::{Direction, StoredEdge},
     error::Error,
-    graph::{Graph, GraphDiff, QuantifiedProperty},
+    graph::{
+        Graph,
+        builder::{GraphDiff, QuantifiedProperty},
+    },
     node::{NodeId, NodeRef, StoredNode},
     prelude::*,
     property::PropertyValue,

@@ -1,6 +1,6 @@
 mod without_registry {
     use flatpg::{
-        graph::{Graph, GraphDiff},
+        graph::{Graph, builder::GraphDiff},
         prelude::*,
     };
 
@@ -47,7 +47,7 @@ mod without_registry {
 
 mod with_registry {
     use flatpg::{
-        graph::{Graph, GraphDiff},
+        graph::{Graph, builder::GraphDiff},
         prelude::*,
     };
 

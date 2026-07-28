@@ -1,6 +1,6 @@
 use flatpg::{
     edge::{Direction, StoredEdge},
-    graph::{Graph, GraphDiff},
+    graph::{Graph, builder::GraphDiff},
     prelude::*,
     property::PropertyValue,
 };
