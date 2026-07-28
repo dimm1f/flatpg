@@ -11,7 +11,7 @@ releases.
 
 Node, edge, and property kinds are defined at compile time as plain Rust enums, deriving `NodeItemKind`, `EdgeItemKind`, and `PropertyItemKind` respectively. A `Schema` implementation ties them together: its associated types `N`, `E`, and `P` name the node, edge, and property kind enums it uses.
 
-`Graph<S>` and `GraphDiff<S>` are generic over a `Schema` `S`. `S` determines the flat array layout: the number of node/edge/property kinds it declares fixes the number and offsets of the storage slots, so the layout is derived from the schema rather than being pointer-based.
+`Graph<S>` and `GraphDiff<S>` are generic over a `Schema` `S`. The schema determines the flat array layout: the number of node/edge/property kinds it declares fixes the number and offsets of the storage slots, so the layout is derived from the schema rather than being pointer-based.
 
 A `Graph` is updated by applying a diff (`GraphDiff::apply`), which takes the `Graph` by value, mutates its flat storage directly (appending new nodes/edges, flipping deletion flags, overwriting updated properties), and returns it. `Graph` isn't `Clone`, so there's no way to keep the pre-update version around — Rust's ownership rules just guarantee you can never end up holding two out-of-sync copies at once.
 
@@ -19,7 +19,6 @@ A few notable points about the model:
 
 - Each node kind declares which properties it may carry. Each property declares its type and whether it holds one value or many (`quantity = One` / `quantity = Multi`).
 - Every edge is stored as a pair of half-edges, one per endpoint. Either endpoint can look up its incident edges (`get_edges`, `get_edges_count`) without scanning the whole graph. Edges are directed (`Direction::In` / `Direction::Out`). An edge may also carry a single property value, visible from either endpoint. The generated `<Variant>Edge` struct exposes it as a typed `property()` accessor; `Graph::get_edge_property` is the lower-level, untyped form it's built on.
-- A node doesn't need to be added to the graph yet to be referenced. Other nodes and edges in the same diff can point at it, e.g. as an edge endpoint or a `NodeRef`-typed property.
 - A diff can add nodes and edges, update a node's property (`update_node_property`), or remove nodes and edges (`remove_node`, `remove_edge`). Diffs apply incrementally, on top of the `Graph` produced by the previous one.
 
 ## Public API
@@ -34,7 +33,7 @@ A schema is a handful of plain enums, described with derive macros, tied togethe
 
 #### `PropertyItemKind`
 
-Derive this on an enum that lists every property a node or edge can carry.
+Derive this on an enum that lists every property a node can carry.
 
 ```rust
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
@@ -69,7 +68,13 @@ enum SimpleNode {
 }
 ```
 
-`#[node_kind(...)]` names the schema and property-kind enum this node kind belongs to; each variant's `#[properties(...)]` lists which property kinds it may carry. For every variant this generates a wrapper struct (`AlphaNode<'a>`, `BetaNode<'a>`, `GammaNode<'a>`) implementing the property traits it declared, a `builders::AlphaNodeBuilder` / `builders::BetaNodeBuilder` / `builders::GammaNodeBuilder` for constructing new nodes of that kind, and an accessor trait named after the variant (`AlphaNodesAccessor` with an `.alpha()` method, `BetaNodesAccessor` with a `.beta()` method, `GammaNodesAccessor` with a `.gamma()` method) blanket-implemented for any `GraphView<S>` — this is what makes `graph.alpha()` work later. It also generates one combined `Node<'a>` enum (`Node::Alpha(AlphaNode)`, `Node::Beta(BetaNode)`, `Node::Gamma(GammaNode)`) so callers can match on a node generically.
+`#[node_kind(...)]` names the schema and property-kind enum this node kind belongs to; each variant's `#[properties(...)]` lists which property kinds it may carry. For every variant this generates:
+
+- a wrapper struct (`AlphaNode<'a>`, `BetaNode<'a>`, `GammaNode<'a>`) implementing the property traits it declared
+- a builder (`builders::AlphaNodeBuilder`, `builders::BetaNodeBuilder`, `builders::GammaNodeBuilder`) for constructing new nodes of that kind
+- an accessor trait named after the variant (`AlphaNodesAccessor` with an `.alpha()` method, `BetaNodesAccessor` with a `.beta()` method, `GammaNodesAccessor` with a `.gamma()` method), blanket-implemented for any `GraphView<S>` — this is what makes `graph.alpha()` work later
+
+It also generates one combined `Node<'a>` enum (`Node::Alpha(AlphaNode)`, `Node::Beta(BetaNode)`, `Node::Gamma(GammaNode)`) so callers can match on a node generically.
 
 #### `EdgeItemKind`
 
@@ -86,7 +91,12 @@ enum SimpleEdge {
 }
 ```
 
-`#[edge_kind(schema = ...)]` names the schema; each variant's `#[property(typ = ... | None)]` says whether that edge kind carries a value. This generates a wrapper struct per variant (`BaseEdge<'a>`, `ExtendedEdge<'a>`) — `ExtendedEdge` alone gets a typed `.property()` accessor (`Result<Option<&str>, Error>`), since `Base` declared `typ = None` — a combined `Edge<'a>` enum, and a single `EdgesAccessor` trait with an `.edges(node, kind, direction)` method, blanket-implemented for any `GraphView<S>`.
+`#[edge_kind(schema = ...)]` names the schema; each variant's `#[property(typ = ... | None)]` says whether that edge kind carries a value. This generates:
+
+- a wrapper struct per variant (`BaseEdge<'a>`, `ExtendedEdge<'a>`)
+- variants that declare `typ = ...` (not `None`) also get a typed `.property()` accessor on their wrapper struct — here `ExtendedEdge` gets one, `BaseEdge` doesn't, since `Base` declared `typ = None`
+- a combined `Edge<'a>` enum
+- a single `EdgesAccessor` trait with an `.edges(node, kind, direction)` method, blanket-implemented for any `GraphView<S>`
 
 #### `EnumProperty`
 
@@ -181,16 +191,11 @@ diff.add_edge(alpha_id, beta_id, SimpleEdge::Base, None);
 let graph = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
 ```
 
-`add_node` takes a `NewNode<S>` (built via the generated `<Variant>NodeBuilder`) and returns a diff-local id that can be passed to `add_edge` as either endpoint. `add_edge` also accepts an already-committed `NodeRef`/`NodeId`, so an edge can connect a brand-new node to one already in the graph. `apply` consumes the diff plus a graph — `Graph::new()` for the very first diff, or the `Graph` a previous `apply` returned — and returns the updated `Graph<S>`; diffs always apply incrementally, on top of whatever the previous one produced. Beyond `add_node`/`add_edge`, `GraphDiff` also has `remove_node(node_ref)`, `remove_edge(edge)`, and `update_node_property(node_ref, prop_kind, value)`.
+`add_node` takes a `NewNode<S>` (built via the generated `<Variant>NodeBuilder`) and returns a diff-local id that can be passed to `add_edge` as either endpoint. `add_edge` also accepts an already-committed `NodeRef`/`NodeId<S>`/`NewNodeId`, so an edge can connect a brand-new node to one already in the graph. `apply` consumes the diff plus a graph — `Graph::new()` for the very first diff, or the `Graph` a previous `apply` returned — and returns the updated `Graph<S>`; diffs always apply incrementally, on top of whatever the previous one produced. Beyond `add_node`/`add_edge`, `GraphDiff` also has `remove_node(node_ref)`, `remove_edge(edge)`, and `update_node_property(node_ref, prop_kind, value)`.
 
 #### `Graph`
 
 `Graph<S>` is the flat-storage graph produced by applying diffs; it's queried directly.
-
-```rust
-let alpha = graph.nodes_by_kind(SimpleNode::Alpha).next().expect("Alpha node");
-let edges = graph.get_edges(alpha, SimpleEdge::Base, Direction::Out).unwrap();
-```
 
 `nodes_by_kind(kind)` iterates live (non-deleted) nodes of a kind as `NodeId<S>`; `nodes_by_kind_with_deleted(kind)` includes tombstoned ones. `get_edges(node, kind, direction)` returns the matching `EdgeId<S>`s for one endpoint without scanning the whole graph, and `get_edges_count(...)` is the cheaper count-only version. `get_node_property`/`get_edge_property` are the untyped, lower-level lookups that the generated per-property accessors (`.key()`, `.count()`, ...) are built on top of; `resolve_string`/`resolve_property` turn storage-level values back into owned `PropertyValue`s.
 
@@ -198,14 +203,7 @@ let edges = graph.get_edges(alpha, SimpleEdge::Base, Direction::Out).unwrap();
 
 `GraphView<S>` is the trait the generated accessor traits (`<Variant>NodesAccessor`, `EdgesAccessor`) are blanket-implemented over:
 
-```rust
-pub trait GraphView<S: Schema> {
-    fn graph(&self) -> &Graph<S>;
-    fn into_graph(self) -> Graph<S>;
-}
-```
-
-`Graph<S>` implements it directly (`graph()` returns `self`), which is why `graph.alpha()` and `graph.edges(...)` work out of the box on a bare `Graph`. Implementing `GraphView` on a custom wrapper type gets the exact same generated accessors for free.
+`Graph<S>` implements it directly, which is why `graph.alpha()` and `graph.edges(...)` work out of the box on a bare `Graph`. Implementing `GraphView` on a custom wrapper type gets the exact same generated accessors for free.
 
 ### Identifiers and references
 
@@ -213,37 +211,16 @@ pub trait GraphView<S: Schema> {
 
 Typed, schema-resolved identifiers for nodes and edges already committed to a `Graph`.
 
-```rust
-let alpha: NodeId<SimpleSchema> = graph.nodes_by_kind(SimpleNode::Alpha).next().unwrap();
-assert_eq!(alpha.kind(), SimpleNode::Alpha);
-```
-
-`NodeId` exposes `.kind()` and `.seq()`; `EdgeId` additionally exposes `.src_node()`, `.dst_node()`, and `.direction()`. Both know their schema, so `.kind()` returns the actual `SimpleNode`/`SimpleEdge` variant rather than a raw index.
+`NodeId<S>` exposes `.kind()` and `.seq()`; `EdgeId<S>` additionally exposes `.src_node()`, `.dst_node()`, and `.direction()`. Both know their schema, so `.kind()` returns the actual `SimpleNode`/`SimpleEdge` variant rather than a raw index.
 
 #### `NodeRef` / `EdgeRef` / `EdgeHandle`
 
 Untyped, schema-erased counterparts to the typed ids above.
 
-```rust
-let alpha_ref = NodeRef::from(&alpha_node);
-diff.add_node(
-    builders::GammaNodeBuilder::new()
-        .add_property(SimpleProperty::Ref, alpha_ref)
-        .unwrap()
-        .build(),
-);
-```
-
-`NodeRef` is what lets a diff reference a node before its typed id is known: a new node earlier in the same diff, or, as above, a `Ref`-typed property pointing at a node committed by an earlier, already-applied diff. `EdgeRef`/`EdgeHandle` play the same role for edges internally.
+- `NodeRef` is what lets a diff reference a node before its typed id is known: a new node earlier in the same diff, or, as above, a `Ref`-typed property pointing at a node committed by an earlier, already-applied diff.
+- `EdgeRef` and `EdgeHandle` play the same role for edges internally.
 
 #### `Direction`
-
-```rust
-pub enum Direction {
-    In,
-    Out,
-}
-```
 
 Every edge is stored as a pair of half-edges, one per endpoint, so either side can look up its incident edges without scanning the whole graph. `Direction` says which half is being looked at: `Out` is the half stored on the source node (pointing at the destination), `In` is the half stored on the destination node (pointing back at the source).
 
@@ -253,33 +230,31 @@ Every edge is stored as a pair of half-edges, one per endpoint, so either side c
 
 `PropertyValue` is the value type passed into `add_property`, `update_node_property`, and edge properties. It has one variant per supported type — the same set of `typ`s usable in a `#[property(typ = ...)]` attribute:
 
-```rust
-pub enum PropertyValue {
-    Bool(bool),
-    Byte(u8),
-    Short(i16),
-    Int(i32),
-    Long(i64),
-    Float(f32),
-    Double(f64),
-    NodeRef(NodeRef),
-    String(String),
-    Enum(EnumRef),
-}
-```
+`From` impls exist for:
 
-`From` impls exist for the corresponding primitives, `NodeRef`, `String`, and any `#[derive(EnumProperty)]` type registered in the schema's `EPR` — so `.add_property(SimpleProperty::Count, 42i32)` and `.add_property(SimpleProperty::State, Status::Active)` both just work. `PropertyType` (`Bool`, `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `NodeRef`, `String`, `Enum`) is the type-only counterpart, used in error messages; a property kind's `Enum<T>` maps to `PropertyType::Enum`.
+- the corresponding primitives
+- `NodeRef`
+- `String`
+- any `#[derive(EnumProperty)]` type registered in the schema's `EPR`
+
+— so `.add_property(SimpleProperty::Count, 42i32)` and `.add_property(SimpleProperty::State, Status::Active)` both just work.
+
+`PropertyType` is the type-only counterpart, used in error messages; a property kind's `Enum<T>` maps to `PropertyType::Enum`. Its variants:
+
+- `Bool`
+- `Byte`
+- `Short`
+- `Int`
+- `Long`
+- `Float`
+- `Double`
+- `NodeRef`
+- `String`
+- `Enum`
 
 #### `QuantifiedProperty`
 
 What `update_node_property` takes, so single values and `Vec`s can both be passed without an explicit wrapper:
-
-```rust
-pub enum QuantifiedProperty {
-    One(PropertyValue),
-    Multi(Vec<PropertyValue>),
-}
-```
 
 A bare `PropertyValue` converts into `One`, and a `Vec<PropertyValue>` converts into `Multi`, via `From` — matching the `quantity = One | Multi` a property kind declared.
 
@@ -287,15 +262,7 @@ A bare `PropertyValue` converts into `One`, and a `Vec<PropertyValue>` converts 
 
 The resolved-in-storage form of a property, as returned by `Graph::get_node_property`/`get_edge_property`. It mirrors `PropertyValue`, except strings stay interned (`StringRef`) until resolved:
 
-```rust
-pub enum StoredProperty {
-    // ... same shape as PropertyValue ...
-    StringRef(StringRef),
-    Enum(EnumRef),
-}
-```
-
-`Graph::resolve_property` turns a `StoredProperty` into an owned `PropertyValue`, resolving any interned string. In practice both types are rarely touched directly: the derives generate typed accessors that do this conversion automatically — `NewNode::add_property(prop_kind, value)` for building nodes, and per-property read methods like `.key()`, `.values()`, `.count()`, `.r#ref()`, `.state()` for reading them back. (`.r#ref()` is a raw identifier, since a `Ref` property collides with the `ref` keyword.)
+`Graph::resolve_property` turns a `StoredProperty` into an owned `PropertyValue`, resolving any interned string. Note that resolving a `StringRef` allocates: it clones the interned string into a new owned `String`, so calling this on a `String`-typed property is not free. In practice both types are rarely touched directly: the derives generate typed accessors that do this conversion automatically — `NewNode::add_property(prop_kind, value)` for building nodes, and per-property read methods like `.key()`, `.values()`, `.count()`, `.r#ref()`, `.state()` for reading them back. (`.r#ref()` is a raw identifier, since a `Ref` property collides with the `ref` keyword.)
 
 ### Errors
 
