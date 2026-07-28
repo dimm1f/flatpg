@@ -1,6 +1,12 @@
 use core::fmt;
 
-use crate::{EnumPropertyIndex, enum_property::EnumRef, error::Error, node::NodeRef};
+use crate::{
+    EnumPropertyIndex,
+    enum_property::EnumRef,
+    error::Error,
+    node::{NodeId, NodeRef},
+    schema::Schema,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QuantityType {
@@ -119,6 +125,12 @@ impl From<f64> for PropertyValue {
 impl From<NodeRef> for PropertyValue {
     fn from(value: NodeRef) -> Self {
         Self::NodeRef(value)
+    }
+}
+
+impl<S: Schema> From<NodeId<S>> for PropertyValue {
+    fn from(value: NodeId<S>) -> Self {
+        Self::NodeRef(NodeRef::from(&value))
     }
 }
 

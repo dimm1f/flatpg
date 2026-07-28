@@ -1,7 +1,6 @@
 use flatpg::{
     edge::{Direction, StoredEdge},
     graph::{Graph, GraphDiff},
-    node::NodeRef,
     prelude::*,
     property::PropertyValue,
 };
@@ -83,12 +82,11 @@ fn main() {
         .nodes_by_kind(SimpleNode::Beta)
         .next()
         .expect("Beta node");
-    let alpha_ref = NodeRef::from(&alpha_node);
 
     let mut diff = GraphDiff::<SimpleSchema>::default();
     let gamma_id = diff.add_node(
         builders::GammaNodeBuilder::new()
-            .add_property(SimpleProperty::Ref, alpha_ref)
+            .add_property(SimpleProperty::Ref, alpha_node)
             .unwrap()
             .add_property(SimpleProperty::State, Status::Active)
             .unwrap()
@@ -98,7 +96,7 @@ fn main() {
     // carry a property (SimpleEdge::Extended has `typ = String`).
     diff.add_edge(
         gamma_id,
-        alpha_ref,
+        alpha_node,
         SimpleEdge::Extended,
         Some(PropertyValue::String("refers-to".to_string())),
     );

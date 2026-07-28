@@ -328,6 +328,12 @@ impl From<NodeRef> for NewOrExistingNode {
     }
 }
 
+impl<S: Schema> From<NodeId<S>> for NewOrExistingNode {
+    fn from(value: NodeId<S>) -> Self {
+        Self::Existing(NodeRef::from(&value))
+    }
+}
+
 #[derive(Default)]
 pub struct GraphDiff<S: Schema> {
     new_nodes: Vec<NewNode<S>>,
