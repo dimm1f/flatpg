@@ -4,7 +4,7 @@ use crate::{
     EnumPropertyIndex,
     enum_property::EnumRef,
     error::Error,
-    node::{NodeId, NodeRef},
+    node::{NodeId, RawNodeId},
     schema::Schema,
 };
 
@@ -25,7 +25,7 @@ pub enum PropertyType {
     Long,
     Float,
     Double,
-    NodeRef,
+    NodeId,
     String,
     Enum,
 }
@@ -41,7 +41,7 @@ impl fmt::Display for PropertyType {
             Self::Long => "Long",
             Self::Float => "Float",
             Self::Double => "Double",
-            Self::NodeRef => "NodeRef",
+            Self::NodeId => "NodeId",
             Self::String => "String",
             Self::Enum => "Enum",
         };
@@ -58,7 +58,7 @@ pub enum PropertyValue {
     Long(i64),
     Float(f32),
     Double(f64),
-    NodeRef(NodeRef),
+    NodeId(RawNodeId),
     String(String),
     Enum(EnumRef),
 }
@@ -73,7 +73,7 @@ impl PropertyValue {
             PropertyValue::Long(_) => PropertyType::Long,
             PropertyValue::Float(_) => PropertyType::Float,
             PropertyValue::Double(_) => PropertyType::Double,
-            PropertyValue::NodeRef(_) => PropertyType::NodeRef,
+            PropertyValue::NodeId(_) => PropertyType::NodeId,
             PropertyValue::String(_) => PropertyType::String,
             PropertyValue::Enum(_) => PropertyType::Enum,
         }
@@ -122,15 +122,15 @@ impl From<f64> for PropertyValue {
     }
 }
 
-impl From<NodeRef> for PropertyValue {
-    fn from(value: NodeRef) -> Self {
-        Self::NodeRef(value)
+impl From<RawNodeId> for PropertyValue {
+    fn from(value: RawNodeId) -> Self {
+        Self::NodeId(value)
     }
 }
 
 impl<S: Schema> From<NodeId<S>> for PropertyValue {
     fn from(value: NodeId<S>) -> Self {
-        Self::NodeRef(NodeRef::from(&value))
+        Self::NodeId(RawNodeId::from(&value))
     }
 }
 
@@ -235,13 +235,13 @@ impl TryFrom<PropertyValue> for f64 {
     }
 }
 
-impl TryFrom<PropertyValue> for NodeRef {
+impl TryFrom<PropertyValue> for RawNodeId {
     type Error = Error;
     fn try_from(value: PropertyValue) -> Result<Self, Self::Error> {
         match value {
-            PropertyValue::NodeRef(v) => Ok(v),
+            PropertyValue::NodeId(v) => Ok(v),
             other => Err(Error::invalid_property_type(
-                PropertyType::NodeRef,
+                PropertyType::NodeId,
                 other.typ(),
             )),
         }

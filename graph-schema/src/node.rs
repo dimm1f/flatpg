@@ -16,8 +16,8 @@ pub trait StoredNode<S: Schema> {
 
     /// Returns an untyped, schema-erased reference to this node, suitable for
     /// passing to `Graph` lookup methods such as `get_node_property`.
-    fn node_ref(&self) -> NodeRef {
-        NodeRef::new(self.kind().index(), self.seq())
+    fn node_ref(&self) -> RawNodeId {
+        RawNodeId::new(self.kind().index(), self.seq())
     }
 
     /// Returns this node's `edge_kind` edges for the source half of the
@@ -65,12 +65,12 @@ impl Default for NodeMeta {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeRef {
+pub struct RawNodeId {
     kind: u32,
     seq: u32,
 }
 
-impl NodeRef {
+impl RawNodeId {
     pub(crate) fn new(kind: usize, seq: usize) -> Self {
         assert!(kind <= u32::MAX as usize);
         assert!(seq <= u32::MAX as usize);
@@ -89,13 +89,13 @@ impl NodeRef {
     }
 }
 
-impl Display for NodeRef {
+impl Display for RawNodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NodeRef({},{})", self.kind(), self.seq())
+        write!(f, "RawNodeId({},{})", self.kind(), self.seq())
     }
 }
 
-impl<S: Schema> From<&NodeId<S>> for NodeRef {
+impl<S: Schema> From<&NodeId<S>> for RawNodeId {
     fn from(value: &NodeId<S>) -> Self {
         Self::new(value.kind().index(), value.seq())
     }
@@ -127,10 +127,10 @@ impl<S: Schema> Display for NodeId<S> {
     }
 }
 
-impl<S: Schema> TryFrom<NodeRef> for NodeId<S> {
+impl<S: Schema> TryFrom<RawNodeId> for NodeId<S> {
     type Error = Error;
 
-    fn try_from(value: NodeRef) -> Result<Self, Self::Error> {
+    fn try_from(value: RawNodeId) -> Result<Self, Self::Error> {
         let kind = S::resolve_node_kind(value)?;
         Ok(Self::new(kind, value.seq()))
     }

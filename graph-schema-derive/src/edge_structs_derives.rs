@@ -442,7 +442,7 @@ mod tests {
             r#"enum E {
                 #[property(typ = String)] Labeled,
                 #[property(typ = Int)] Weighted,
-                #[property(typ = NodeRef)] Linked,
+                #[property(typ = NodeId)] Linked,
             }"#,
         );
         let config = edge_kind_config("MySchema");

@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     EdgeDirectionKind, ItemAsStr, ItemIndex,
-    edge::{Direction, EdgeId, EdgeRef},
+    edge::{Direction, EdgeId, RawEdgeId},
     error::Error,
     graph::{Graph, GraphView, node_is_deleted},
-    node::{NewNode, NodeId, NodeMeta, NodeRef},
+    node::{NewNode, NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, PropKind, Schema},
     storage::{EdgeStorage, NodeMetaStorage, PropertyStorage, StoredProperty},
@@ -31,9 +31,9 @@ struct NewEdge<S: Schema> {
 
 type ChangeId = usize;
 enum Change<S: Schema> {
-    RemoveNode(NodeRef),
-    UpdateNodeProperty(NodeRef, PropKind<S>, QuantifiedProperty),
-    RemoveEdge(EdgeRef),
+    RemoveNode(RawNodeId),
+    UpdateNodeProperty(RawNodeId, PropKind<S>, QuantifiedProperty),
+    RemoveEdge(RawEdgeId),
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ type NewNodeId = usize;
 
 pub enum NewOrExistingNode {
     New(NewNodeId),
-    Existing(NodeRef),
+    Existing(RawNodeId),
 }
 
 impl From<NewNodeId> for NewOrExistingNode {
@@ -85,15 +85,15 @@ impl From<NewNodeId> for NewOrExistingNode {
     }
 }
 
-impl From<NodeRef> for NewOrExistingNode {
-    fn from(value: NodeRef) -> Self {
+impl From<RawNodeId> for NewOrExistingNode {
+    fn from(value: RawNodeId) -> Self {
         Self::Existing(value)
     }
 }
 
 impl<S: Schema> From<NodeId<S>> for NewOrExistingNode {
     fn from(value: NodeId<S>) -> Self {
-        Self::Existing(NodeRef::from(&value))
+        Self::Existing(RawNodeId::from(&value))
     }
 }
 
@@ -143,7 +143,7 @@ impl<S: Schema> GraphDiff<S> {
         self.new_edges.len() - 1
     }
 
-    pub fn remove_node<T: Into<NodeRef>>(&mut self, node_ref: T) -> ChangeId {
+    pub fn remove_node<T: Into<RawNodeId>>(&mut self, node_ref: T) -> ChangeId {
         self.changes.push(Change::RemoveNode(node_ref.into()));
         self.changes.len() - 1
     }
@@ -154,7 +154,7 @@ impl<S: Schema> GraphDiff<S> {
         self.changes.len() - 1
     }
 
-    pub fn update_node_property<T: Into<NodeRef>, P: Into<QuantifiedProperty>>(
+    pub fn update_node_property<T: Into<RawNodeId>, P: Into<QuantifiedProperty>>(
         &mut self,
         node_ref: T,
         property_kind: PropKind<S>,
@@ -174,7 +174,7 @@ impl<S: Schema> GraphDiff<S> {
 
         // Note: `node_remapper` must contain nodes with actual NodeSeq.
         // Therefore, the max seq per kind must be obtained from graph before mapping.
-        let mut node_remapper: HashMap<NewNodeId, NodeRef> = HashMap::new();
+        let mut node_remapper: HashMap<NewNodeId, RawNodeId> = HashMap::new();
         let graph_nodes_max_seq = S::node_kinds()
             .iter()
             .map(|k| graph.node_count_by_kind_with_deleted(*k))
@@ -226,7 +226,7 @@ impl<S: Schema> GraphDiff<S> {
             let nodes_storage = unsafe { new_nodes.get_unchecked_mut(node.kind().index()) };
             nodes_storage.push(NodeMeta::default());
 
-            node_remapper.insert(i, NodeRef::new(node.kind().index(), seq));
+            node_remapper.insert(i, RawNodeId::new(node.kind().index(), seq));
 
             for (prop_kind, new_values) in node.properties() {
                 slot_property
@@ -272,7 +272,7 @@ impl<S: Schema> GraphDiff<S> {
         // Initialize the offsers array with new nodes offsets
         graph.edge_storage.append(new_edges);
 
-        let resolve_node_ref = |node: &NewOrExistingNode| -> Option<NodeRef> {
+        let resolve_node_ref = |node: &NewOrExistingNode| -> Option<RawNodeId> {
             match node {
                 NewOrExistingNode::New(id) => node_remapper.get(id).copied(),
                 NewOrExistingNode::Existing(node_ref) => Some(*node_ref),
@@ -333,7 +333,7 @@ impl<S: Schema> GraphDiff<S> {
                 let start = end - 1;
 
                 if let Some(halves) = seq_halves.get(&start) {
-                    let new_neighbors = halves.iter().map(|h| NodeRef::from(&h.neighbor));
+                    let new_neighbors = halves.iter().map(|h| RawNodeId::from(&h.neighbor));
 
                     let place = offsets[end] as usize + delta;
                     neigbors.splice(place..place, new_neighbors);
@@ -427,7 +427,7 @@ impl<S: Schema> GraphDiff<S> {
 
 fn remove_half_edge<S>(
     graph: &mut Graph<S>,
-    node_ref: NodeRef,
+    node_ref: RawNodeId,
     direction: Direction,
     edge_kind: EdgeKind<S>,
     local_seq: usize,
@@ -465,10 +465,10 @@ where
 
 fn find_reverse_edge_seq<S>(
     graph: &Graph<S>,
-    node: NodeRef,
+    node: RawNodeId,
     direction: Direction,
     edge_kind: EdgeKind<S>,
-    target: NodeRef,
+    target: RawNodeId,
 ) -> Result<usize, Error>
 where
     S: Schema,
@@ -511,7 +511,7 @@ fn edge_to_halves<F, S>(
     property: Option<StoredProperty>,
 ) -> Option<[HalfEdge<S>; 2]>
 where
-    F: Fn(&NewOrExistingNode) -> Option<NodeRef>,
+    F: Fn(&NewOrExistingNode) -> Option<RawNodeId>,
     S: Schema,
 {
     let src_node = node_resolver(&new_edge.src)?;
@@ -545,7 +545,7 @@ fn to_stored_property(prop: &PropertyValue, strings: &mut StringsPool) -> Stored
         PropertyValue::Long(v) => StoredProperty::Long(*v),
         PropertyValue::Float(v) => StoredProperty::Float(*v),
         PropertyValue::Double(v) => StoredProperty::Double(*v),
-        PropertyValue::NodeRef(node_ref) => StoredProperty::NodeRef(*node_ref),
+        PropertyValue::NodeId(node_ref) => StoredProperty::NodeId(*node_ref),
         PropertyValue::String(s) => StoredProperty::StringRef(strings.intern(s)),
         PropertyValue::Enum(v) => StoredProperty::Enum(*v),
     }

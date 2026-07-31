@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
-use crate::edge::{Direction, EdgeHandle, EdgeRef};
+use crate::edge::{Direction, EdgeHandle, RawEdgeId};
 use crate::error::Error;
-use crate::node::NodeRef;
+use crate::node::RawNodeId;
 use crate::property::PropertyType;
 use crate::{
     EdgeDirectionKind, EdgeItemKind, EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex,
@@ -103,25 +103,25 @@ pub trait Schema: Sized + Clone + Copy {
     type P: PropertyItemKind;
     type EPR: EnumPropertyRegistry;
 
-    /// Builds an [`EdgeRef`] from a source node, a destination node, a direction, and an edge handle.
+    /// Builds a [`RawEdgeId`] from a source node, a destination node, a direction, and an edge handle.
     fn make_edge(
-        src_node_ref: NodeRef,
-        dst_node_ref: NodeRef,
+        src_node_ref: RawNodeId,
+        dst_node_ref: RawNodeId,
         direction: Direction,
         edge_handle: EdgeHandle,
-    ) -> EdgeRef {
+    ) -> RawEdgeId {
         Direction::make_edge(src_node_ref, dst_node_ref, direction, edge_handle)
     }
 
-    /// Converts a [`NodeRef`] to its typed node kind.
+    /// Converts a [`RawNodeId`] to its typed node kind.
     ///
     /// Returns an error if the kind index stored in the ref does not map to any known node kind.
-    fn resolve_node_kind(node_ref: NodeRef) -> Result<Self::N, Error> {
+    fn resolve_node_kind(node_ref: RawNodeId) -> Result<Self::N, Error> {
         Self::node_kind_by_index(node_ref.kind())
             .ok_or_else(|| Error::unresolved_node_kind(node_ref.kind()))
     }
 
-    /// Converts an [`EdgeRef`] to its typed edge kind.
+    /// Converts a [`RawEdgeId`] to its typed edge kind.
     ///
     /// Reads the kind index from the ref and looks it up via [`Schema::edge_kind_by_index`].
     /// Returns an error if the index does not map to any known edge kind in this schema.
@@ -130,7 +130,7 @@ pub trait Schema: Sized + Clone + Copy {
             .ok_or_else(|| Error::unresolved_edge_kind(edge_handle.kind()))
     }
 
-    /// Converts an [`EdgeRef`] to its typed edge direction.
+    /// Converts a [`RawEdgeId`] to its typed edge direction.
     ///
     /// Reads the direction index from the ref and looks it up via [`Schema::direction_by_index`].
     /// Returns an error if the index does not map to any known direction in this schema.

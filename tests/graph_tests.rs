@@ -5,7 +5,7 @@ use flatpg::{
         Graph,
         builder::{GraphDiff, QuantifiedProperty},
     },
-    node::{NodeId, NodeRef, StoredNode},
+    node::{NodeId, RawNodeId, StoredNode},
     prelude::*,
     property::PropertyValue,
     schema::Schema,
@@ -510,13 +510,13 @@ fn add_edge_between_new_nodes() {
         .expect("Beta node");
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&alpha), TestEdge::Plain, Direction::Out)
+            .get_edges_count(RawNodeId::from(&alpha), TestEdge::Plain, Direction::Out)
             .expect("out edges count"),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta), TestEdge::Plain, Direction::In)
             .expect("in edges count"),
         1
     );
@@ -567,7 +567,7 @@ fn add_multiple_edges_same_kind() {
         .expect("Alpha node");
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&alpha), TestEdge::Plain, Direction::Out)
+            .get_edges_count(RawNodeId::from(&alpha), TestEdge::Plain, Direction::Out)
             .expect("out edges count"),
         2
     );
@@ -580,13 +580,13 @@ fn add_edge_between_existing_nodes() {
     setup.add_node(builders::BetaNodeBuilder::new().build());
     let graph = setup.apply(Graph::new()).expect("apply setup");
 
-    let alpha_ref = NodeRef::from(
+    let alpha_ref = RawNodeId::from(
         &graph
             .nodes_by_kind(TestNode::Alpha)
             .next()
             .expect("Alpha node"),
     );
-    let beta_ref = NodeRef::from(
+    let beta_ref = RawNodeId::from(
         &graph
             .nodes_by_kind(TestNode::Beta)
             .next()
@@ -617,7 +617,7 @@ fn add_edge_between_new_and_existing_node() {
     setup.add_node(builders::AlphaNodeBuilder::new().build());
     let graph = setup.apply(Graph::new()).expect("apply setup");
 
-    let alpha_ref = NodeRef::from(
+    let alpha_ref = RawNodeId::from(
         &graph
             .nodes_by_kind(TestNode::Alpha)
             .next()
@@ -641,7 +641,7 @@ fn add_edge_between_new_and_existing_node() {
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta), TestEdge::Plain, Direction::In)
             .expect("in edges count"),
         1
     );
@@ -809,19 +809,19 @@ fn remove_first_of_many_out_edges_preserves_others() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta0), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta0), TestEdge::Plain, Direction::In)
             .unwrap(),
         0
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta1), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta1), TestEdge::Plain, Direction::In)
             .unwrap(),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta2), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta2), TestEdge::Plain, Direction::In)
             .unwrap(),
         1
     );
@@ -851,7 +851,7 @@ fn remove_middle_of_many_out_edges_preserves_others() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta1), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta1), TestEdge::Plain, Direction::In)
             .unwrap(),
         0
     );
@@ -881,7 +881,7 @@ fn remove_last_of_many_out_edges_preserves_others() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta2), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta2), TestEdge::Plain, Direction::In)
             .unwrap(),
         0
     );
@@ -1001,7 +1001,7 @@ fn add_property_remove_then_readd_restores_value() {
     let graph = diff2.apply(graph).expect("apply diff 2");
     assert_eq!(
         graph
-            .get_node_property(NodeRef::from(&node), TestProperty::Key)
+            .get_node_property(RawNodeId::from(&node), TestProperty::Key)
             .unwrap()
             .count(),
         0
@@ -1046,15 +1046,15 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
     let graph = diff2.apply(graph).expect("apply diff 2");
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&alpha), TestEdge::Plain, Direction::Out)
+            .get_edges_count(RawNodeId::from(&alpha), TestEdge::Plain, Direction::Out)
             .unwrap(),
         0
     );
 
     let mut diff3 = GraphDiff::<TestSchema>::default();
     diff3.add_edge(
-        NodeRef::from(&alpha),
-        NodeRef::from(&beta),
+        RawNodeId::from(&alpha),
+        RawNodeId::from(&beta),
         TestEdge::Plain,
         None,
     );
@@ -1062,13 +1062,13 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
 
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&alpha), TestEdge::Plain, Direction::Out)
+            .get_edges_count(RawNodeId::from(&alpha), TestEdge::Plain, Direction::Out)
             .unwrap(),
         1
     );
     assert_eq!(
         graph
-            .get_edges_count(NodeRef::from(&beta), TestEdge::Plain, Direction::In)
+            .get_edges_count(RawNodeId::from(&beta), TestEdge::Plain, Direction::In)
             .unwrap(),
         1
     );

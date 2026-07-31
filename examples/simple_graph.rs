@@ -22,7 +22,7 @@ enum SimpleProperty {
     Values,
     #[property(typ = Int, quantity = One)]
     Count,
-    #[property(typ = NodeRef, quantity = One)]
+    #[property(typ = NodeId, quantity = One)]
     Ref,
     #[property(typ = Enum<Status>, quantity = One)]
     State,

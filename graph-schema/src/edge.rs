@@ -2,7 +2,7 @@ use crate::{
     EdgeDirectionKind, ItemAsStr, ItemFromIndex, ItemIndex,
     error::Error,
     graph::Graph,
-    node::{NodeId, NodeRef},
+    node::{NodeId, RawNodeId},
     schema::{EdgeKind, Schema},
 };
 
@@ -50,14 +50,14 @@ impl EdgeDirectionKind for Direction {
         }
     }
 
-    fn make_edge(src: NodeRef, dst: NodeRef, direction: Self, handle: EdgeHandle) -> EdgeRef {
+    fn make_edge(src: RawNodeId, dst: RawNodeId, direction: Self, handle: EdgeHandle) -> RawEdgeId {
         match direction {
-            Direction::In => EdgeRef {
+            Direction::In => RawEdgeId {
                 src_node_ref: dst,
                 dst_node_ref: src,
                 handle,
             },
-            Direction::Out => EdgeRef {
+            Direction::Out => RawEdgeId {
                 src_node_ref: src,
                 dst_node_ref: dst,
                 handle,
@@ -73,7 +73,7 @@ impl EdgeDirectionKind for Direction {
         Self::In
     }
 
-    fn orient_edge(&self, src: NodeRef, dst: NodeRef) -> (NodeRef, Self, NodeRef, Self) {
+    fn orient_edge(&self, src: RawNodeId, dst: RawNodeId) -> (RawNodeId, Self, RawNodeId, Self) {
         match *self {
             Self::Out => (src, Self::Out, dst, Self::In),
             Self::In => (dst, Self::In, src, Self::Out),
@@ -142,25 +142,29 @@ impl<S: Schema> From<&EdgeId<S>> for EdgeHandle {
     }
 }
 
-pub struct EdgeRef {
-    src_node_ref: NodeRef,
-    dst_node_ref: NodeRef,
+pub struct RawEdgeId {
+    src_node_ref: RawNodeId,
+    dst_node_ref: RawNodeId,
     handle: EdgeHandle,
 }
 
-impl EdgeRef {
-    pub(crate) fn new(src_node_ref: NodeRef, dst_node_ref: NodeRef, handle: EdgeHandle) -> Self {
+impl RawEdgeId {
+    pub(crate) fn new(
+        src_node_ref: RawNodeId,
+        dst_node_ref: RawNodeId,
+        handle: EdgeHandle,
+    ) -> Self {
         Self {
             src_node_ref,
             dst_node_ref,
             handle,
         }
     }
-    pub fn src_node_ref(&self) -> NodeRef {
+    pub fn src_node_ref(&self) -> RawNodeId {
         self.src_node_ref
     }
 
-    pub fn dst(&self) -> NodeRef {
+    pub fn dst(&self) -> RawNodeId {
         self.dst_node_ref
     }
 
@@ -169,7 +173,7 @@ impl EdgeRef {
     }
 }
 
-impl<S: Schema> From<&EdgeId<S>> for EdgeRef {
+impl<S: Schema> From<&EdgeId<S>> for RawEdgeId {
     fn from(value: &EdgeId<S>) -> Self {
         let handle = EdgeHandle::from(value);
         Self::new(
@@ -226,10 +230,10 @@ impl<S: Schema> EdgeId<S> {
     }
 }
 
-impl<S: Schema> TryFrom<EdgeRef> for EdgeId<S> {
+impl<S: Schema> TryFrom<RawEdgeId> for EdgeId<S> {
     type Error = Error;
 
-    fn try_from(value: EdgeRef) -> Result<Self, Self::Error> {
+    fn try_from(value: RawEdgeId) -> Result<Self, Self::Error> {
         let src_node = value.src_node_ref.try_into()?;
         let dst_node = value.dst_node_ref.try_into()?;
         let kind = S::resolve_edge_kind(value.handle())?;

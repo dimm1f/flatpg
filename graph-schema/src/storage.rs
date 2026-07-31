@@ -7,7 +7,7 @@ use crate::{
     ItemIndex,
     enum_property::EnumRef,
     error::Error,
-    node::{NodeMeta, NodeRef},
+    node::{NodeMeta, RawNodeId},
     property::PropertyType,
     schema::Schema,
     strings_pool::StringRef,
@@ -22,7 +22,7 @@ pub enum StoredProperty {
     Long(i64),
     Float(f32),
     Double(f64),
-    NodeRef(NodeRef),
+    NodeId(RawNodeId),
     StringRef(StringRef),
     Enum(EnumRef),
 }
@@ -37,7 +37,7 @@ impl StoredProperty {
             StoredProperty::Long(_) => PropertyType::Long,
             StoredProperty::Float(_) => PropertyType::Float,
             StoredProperty::Double(_) => PropertyType::Double,
-            StoredProperty::NodeRef(_) => PropertyType::NodeRef,
+            StoredProperty::NodeId(_) => PropertyType::NodeId,
             StoredProperty::StringRef(_) => PropertyType::String,
             StoredProperty::Enum(_) => PropertyType::Enum,
         }
@@ -53,7 +53,7 @@ pub enum StorageArray {
     Long(Vec<i64>),
     Float(Vec<f32>),
     Double(Vec<f64>),
-    NodeRef(Vec<NodeRef>),
+    NodeId(Vec<RawNodeId>),
     StringRef(Vec<StringRef>),
     Enum(Vec<EnumRef>),
     #[default]
@@ -71,7 +71,7 @@ impl StorageArray {
             PropertyType::Long => Self::Long(Vec::new()),
             PropertyType::Float => Self::Float(Vec::new()),
             PropertyType::Double => Self::Double(Vec::new()),
-            PropertyType::NodeRef => Self::NodeRef(Vec::new()),
+            PropertyType::NodeId => Self::NodeId(Vec::new()),
             PropertyType::String => Self::StringRef(Vec::new()),
             PropertyType::Enum => Self::Enum(Vec::new()),
         }
@@ -86,7 +86,7 @@ impl StorageArray {
             StorageArray::Long(_) => PropertyType::Long,
             StorageArray::Float(_) => PropertyType::Float,
             StorageArray::Double(_) => PropertyType::Double,
-            StorageArray::NodeRef(_) => PropertyType::NodeRef,
+            StorageArray::NodeId(_) => PropertyType::NodeId,
             StorageArray::StringRef(_) => PropertyType::String,
             StorageArray::Enum(_) => PropertyType::Enum,
             StorageArray::None => PropertyType::None,
@@ -102,7 +102,7 @@ impl StorageArray {
             StorageArray::Long(v) => v.get(index).copied().map(StoredProperty::Long),
             StorageArray::Float(v) => v.get(index).copied().map(StoredProperty::Float),
             StorageArray::Double(v) => v.get(index).copied().map(StoredProperty::Double),
-            StorageArray::NodeRef(v) => v.get(index).cloned().map(StoredProperty::NodeRef),
+            StorageArray::NodeId(v) => v.get(index).cloned().map(StoredProperty::NodeId),
             StorageArray::StringRef(v) => v.get(index).cloned().map(StoredProperty::StringRef),
             StorageArray::Enum(v) => v.get(index).copied().map(StoredProperty::Enum),
             StorageArray::None => None,
@@ -120,7 +120,7 @@ impl StorageArray {
             (StorageArray::Long(storage), StoredProperty::Long(v)) => storage.push(*v),
             (StorageArray::Float(storage), StoredProperty::Float(v)) => storage.push(*v),
             (StorageArray::Double(storage), StoredProperty::Double(v)) => storage.push(*v),
-            (StorageArray::NodeRef(storage), StoredProperty::NodeRef(v)) => storage.push(*v),
+            (StorageArray::NodeId(storage), StoredProperty::NodeId(v)) => storage.push(*v),
             (StorageArray::StringRef(storage), StoredProperty::StringRef(v)) => storage.push(*v),
             (StorageArray::Enum(storage), StoredProperty::Enum(v)) => storage.push(*v),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
@@ -139,7 +139,7 @@ impl StorageArray {
             (StorageArray::Long(storage), StorageArray::Long(v)) => storage.append(v),
             (StorageArray::Float(storage), StorageArray::Float(v)) => storage.append(v),
             (StorageArray::Double(storage), StorageArray::Double(v)) => storage.append(v),
-            (StorageArray::NodeRef(storage), StorageArray::NodeRef(v)) => storage.append(v),
+            (StorageArray::NodeId(storage), StorageArray::NodeId(v)) => storage.append(v),
             (StorageArray::StringRef(storage), StorageArray::StringRef(v)) => storage.append(v),
             (StorageArray::Enum(storage), StorageArray::Enum(v)) => storage.append(v),
             (StorageArray::None, StorageArray::None) => (),
@@ -159,7 +159,7 @@ impl StorageArray {
             (StorageArray::Long(storage), StoredProperty::Long(v)) => storage.insert(i, *v),
             (StorageArray::Float(storage), StoredProperty::Float(v)) => storage.insert(i, *v),
             (StorageArray::Double(storage), StoredProperty::Double(v)) => storage.insert(i, *v),
-            (StorageArray::NodeRef(storage), StoredProperty::NodeRef(v)) => storage.insert(i, *v),
+            (StorageArray::NodeId(storage), StoredProperty::NodeId(v)) => storage.insert(i, *v),
             (StorageArray::StringRef(storage), StoredProperty::StringRef(v)) => {
                 storage.insert(i, *v)
             }
@@ -192,7 +192,7 @@ impl StorageArray {
             StorageArray::Double(v) => {
                 v.drain(range);
             }
-            StorageArray::NodeRef(v) => {
+            StorageArray::NodeId(v) => {
                 v.drain(range);
             }
             StorageArray::StringRef(v) => {
@@ -215,7 +215,7 @@ impl StorageArray {
             StorageArray::Long(items) => items.len(),
             StorageArray::Float(items) => items.len(),
             StorageArray::Double(items) => items.len(),
-            StorageArray::NodeRef(node_ref) => node_ref.len(),
+            StorageArray::NodeId(node_ref) => node_ref.len(),
             StorageArray::StringRef(items) => items.len(),
             StorageArray::Enum(items) => items.len(),
             StorageArray::None => 1,
@@ -324,17 +324,17 @@ impl StorageArray {
         }
     }
 
-    pub fn try_as_ref(&self) -> Result<&Vec<NodeRef>, Error> {
+    pub fn try_as_ref(&self) -> Result<&Vec<RawNodeId>, Error> {
         match self {
-            Self::NodeRef(items) => Ok(items),
-            _ => Err(self.casting_error(PropertyType::NodeRef)),
+            Self::NodeId(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::NodeId)),
         }
     }
 
-    pub fn try_as_ref_mut(&mut self) -> Result<&mut Vec<NodeRef>, Error> {
+    pub fn try_as_ref_mut(&mut self) -> Result<&mut Vec<RawNodeId>, Error> {
         match self {
-            Self::NodeRef(items) => Ok(items),
-            _ => Err(self.casting_error(PropertyType::NodeRef)),
+            Self::NodeId(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::NodeId)),
         }
     }
 
@@ -415,10 +415,10 @@ impl StorageArray {
         }
     }
 
-    pub fn try_into_ref(self) -> Result<Vec<NodeRef>, Error> {
+    pub fn try_into_ref(self) -> Result<Vec<RawNodeId>, Error> {
         match self {
-            Self::NodeRef(items) => Ok(items),
-            _ => Err(self.casting_error(PropertyType::NodeRef)),
+            Self::NodeId(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::NodeId)),
         }
     }
 
@@ -505,7 +505,7 @@ impl<S: Schema> EdgeStorage<S> {
                 ])
             };
             *offsets = StorageArray::new(PropertyType::Int);
-            *neighbors = StorageArray::new(PropertyType::NodeRef);
+            *neighbors = StorageArray::new(PropertyType::NodeId);
             *properties = StorageArray::new(S::edge_property_type(edge_kind));
         }
         Self {

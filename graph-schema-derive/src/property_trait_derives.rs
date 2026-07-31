@@ -15,7 +15,7 @@ pub(crate) const TYP_INT: &str = "Int";
 pub(crate) const TYP_LONG: &str = "Long";
 pub(crate) const TYP_FLOAT: &str = "Float";
 pub(crate) const TYP_DOUBLE: &str = "Double";
-pub(crate) const TYP_NODE_REF: &str = "NodeRef";
+pub(crate) const TYP_NODE_ID: &str = "NodeId";
 pub(crate) const TYP_STRING: &str = "String";
 pub(crate) const TYP_ENUM: &str = "Enum";
 pub(crate) const QTY_MULTI: &str = "Multi";
@@ -114,11 +114,11 @@ pub(crate) fn property_binding(
             expr: quote!(Ok(v)),
             prop_type_path: quote!(flatpg::property::PropertyType::Double),
         },
-        TYP_NODE_REF => PropertyBinding {
+        TYP_NODE_ID => PropertyBinding {
             elem_ty: quote!(flatpg::node::NodeId<#schema_ty>),
-            pattern: quote!(flatpg::storage::StoredProperty::NodeRef(v)),
+            pattern: quote!(flatpg::storage::StoredProperty::NodeId(v)),
             expr: quote!(flatpg::node::NodeId::<#schema_ty>::try_from(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::NodeRef),
+            prop_type_path: quote!(flatpg::property::PropertyType::NodeId),
         },
         TYP_STRING => PropertyBinding {
             elem_ty: quote!(&str),
@@ -197,7 +197,7 @@ fn build_property_trait(
             format!(
                 "#[property(typ = None)] is not valid on a node-property enum variant \
                  (`{variant}`); `None` is reserved for edge property kinds that carry no \
-                 value. Use one of: Bool, Byte, Short, Int, Long, Float, Double, NodeRef, \
+                 value. Use one of: Bool, Byte, Short, Int, Long, Float, Double, NodeId, \
                  String."
             ),
         ));
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn escapes_keyword_collision() {
-        let input = parse_enum(r#"enum P { #[property(typ = NodeRef, quantity = One)] Ref }"#);
+        let input = parse_enum(r#"enum P { #[property(typ = NodeId, quantity = One)] Ref }"#);
         let file = parse_output(property_traits_derive(&input));
         let t = find_trait(&file, "Ref").expect("Ref trait not found");
         // Exactly one method, whose unraw name is "ref" (i.e. it was raw-escaped).
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn node_ref_typed_property_returns_node() {
-        let input = parse_enum(r#"enum P { #[property(typ = NodeRef, quantity = One)] Owner }"#);
+        let input = parse_enum(r#"enum P { #[property(typ = NodeId, quantity = One)] Owner }"#);
         let file = parse_output(property_traits_derive(&input));
         let t = find_trait(&file, "Owner").unwrap();
         let m = find_trait_method(t, "owner").unwrap();

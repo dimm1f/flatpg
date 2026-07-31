@@ -2,7 +2,7 @@ use crate::{
     EdgeDirectionKind, ItemIndex,
     edge::{Direction, EdgeHandle, EdgeId},
     error::Error,
-    node::{NodeId, NodeMeta, NodeRef},
+    node::{NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, EdgeStorageSlot, NodeKind, PropKind, Schema},
     storage::{EdgeStorage, NodeMetaStorage, PropertyStorage, StorageArray, StoredProperty},
@@ -45,7 +45,7 @@ impl<S: Schema> Graph<S> {
             StoredProperty::Long(v) => PropertyValue::Long(v),
             StoredProperty::Float(v) => PropertyValue::Float(v),
             StoredProperty::Double(v) => PropertyValue::Double(v),
-            StoredProperty::NodeRef(v) => PropertyValue::NodeRef(v),
+            StoredProperty::NodeId(v) => PropertyValue::NodeId(v),
             StoredProperty::StringRef(str_ref) => {
                 PropertyValue::String(self.resolve_string(str_ref)?.to_owned())
             }
@@ -95,7 +95,7 @@ impl<S: Schema> Graph<S> {
 
     pub fn get_node_property(
         &self,
-        node_ref: NodeRef,
+        node_ref: RawNodeId,
         property_kind: PropKind<S>,
     ) -> Result<impl Iterator<Item = StoredProperty>, Error> {
         let kind = S::resolve_node_kind(node_ref)?;
@@ -134,7 +134,11 @@ impl<S: Schema> Graph<S> {
     }
 
     #[inline]
-    fn get_edges_offset(&self, node: NodeRef, slot: EdgeStorageSlot) -> Result<(i32, i32), Error> {
+    fn get_edges_offset(
+        &self,
+        node: RawNodeId,
+        slot: EdgeStorageSlot,
+    ) -> Result<(i32, i32), Error> {
         self.edge_storage
             .get(slot.offset_index())
             .ok_or_else(|| Error::slot_offsets_not_found(slot.to_string()))
@@ -150,7 +154,7 @@ impl<S: Schema> Graph<S> {
     }
     pub fn get_edges_count(
         &self,
-        node_ref: NodeRef,
+        node_ref: RawNodeId,
         edge_kind: EdgeKind<S>,
         direction: Direction,
     ) -> Result<usize, Error> {
@@ -189,7 +193,7 @@ impl<S: Schema> Graph<S> {
                 .get(slot.neighbors_index())
                 .and_then(|x| x.get(start + i))
                 .and_then(|p| match p {
-                    StoredProperty::NodeRef(node_ref) => Some(node_ref),
+                    StoredProperty::NodeId(node_ref) => Some(node_ref),
                     _ => None,
                 })
                 .ok_or_else(|| Error::neighbor_not_found(start + i))?;

@@ -44,7 +44,7 @@ enum SimpleProperty {
     Values,
     #[property(typ = Int, quantity = One)]
     Count,
-    #[property(typ = NodeRef, quantity = One)]
+    #[property(typ = NodeId, quantity = One)]
     Ref,
 }
 ```
@@ -191,7 +191,7 @@ diff.add_edge(alpha_id, beta_id, SimpleEdge::Base, None);
 let graph = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
 ```
 
-`add_node` takes a `NewNode<S>` (built via the generated `<Variant>NodeBuilder`) and returns a diff-local id that can be passed to `add_edge` as either endpoint. `add_edge` also accepts an already-committed `NodeRef`/`NodeId<S>`/`NewNodeId`, so an edge can connect a brand-new node to one already in the graph. `apply` consumes the diff plus a graph — `Graph::new()` for the very first diff, or the `Graph` a previous `apply` returned — and returns the updated `Graph<S>`; diffs always apply incrementally, on top of whatever the previous one produced. Beyond `add_node`/`add_edge`, `GraphDiff` also has `remove_node(node_ref)`, `remove_edge(edge)`, and `update_node_property(node_ref, prop_kind, value)`.
+`add_node` takes a `NewNode<S>` (built via the generated `<Variant>NodeBuilder`) and returns a diff-local id that can be passed to `add_edge` as either endpoint. `add_edge` also accepts an already-committed `RawNodeId`/`NodeId<S>`/`NewNodeId`, so an edge can connect a brand-new node to one already in the graph. `apply` consumes the diff plus a graph — `Graph::new()` for the very first diff, or the `Graph` a previous `apply` returned — and returns the updated `Graph<S>`; diffs always apply incrementally, on top of whatever the previous one produced. Beyond `add_node`/`add_edge`, `GraphDiff` also has `remove_node(node_ref)`, `remove_edge(edge)`, and `update_node_property(node_ref, prop_kind, value)`.
 
 #### `Graph`
 
@@ -213,12 +213,12 @@ Typed, schema-resolved identifiers for nodes and edges already committed to a `G
 
 `NodeId<S>` exposes `.kind()` and `.seq()`; `EdgeId<S>` additionally exposes `.src_node()`, `.dst_node()`, and `.direction()`. Both know their schema, so `.kind()` returns the actual `SimpleNode`/`SimpleEdge` variant rather than a raw index.
 
-#### `NodeRef` / `EdgeRef` / `EdgeHandle`
+#### `RawNodeId` / `RawEdgeId` / `EdgeHandle`
 
 Untyped, schema-erased counterparts to the typed ids above.
 
-- `NodeRef` is what lets a diff reference a node before its typed id is known: a new node earlier in the same diff, or, as above, a `Ref`-typed property pointing at a node committed by an earlier, already-applied diff.
-- `EdgeRef` and `EdgeHandle` play the same role for edges internally.
+- `RawNodeId` is what lets a diff reference a node before its typed id is known: a new node earlier in the same diff, or, as above, a `NodeId`-typed property pointing at a node committed by an earlier, already-applied diff.
+- `RawEdgeId` and `EdgeHandle` play the same role for edges internally.
 
 #### `Direction`
 
@@ -233,7 +233,7 @@ Every edge is stored as a pair of half-edges, one per endpoint, so either side c
 `From` impls exist for:
 
 - the corresponding primitives
-- `NodeRef`
+- `RawNodeId` / `NodeId<S>`
 - `String`
 - any `#[derive(EnumProperty)]` type registered in the schema's `EPR`
 
@@ -248,7 +248,7 @@ Every edge is stored as a pair of half-edges, one per endpoint, so either side c
 - `Long`
 - `Float`
 - `Double`
-- `NodeRef`
+- `NodeId`
 - `String`
 - `Enum`
 
@@ -297,8 +297,12 @@ The crate is organized as a small workspace:
 Putting the `SimpleProperty`/`SimpleNode`/`SimpleEdge`/`SimpleSchema` pieces introduced above together with the diff-and-query flow from [Building and applying graphs](#building-and-applying-graphs) gives the complete, runnable program below:
 
 ```rust
-use flatpg::{graph::Graph, graph::builder::GraphDiff, node::NodeRef, prelude::*, schema::Schema};
-use graph_schema::edge::Direction;
+use flatpg::{
+    edge::{Direction, StoredEdge},
+    graph::{Graph, builder::GraphDiff},
+    prelude::*,
+    property::PropertyValue,
+};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
@@ -308,7 +312,7 @@ enum SimpleProperty {
     Values,
     #[property(typ = Int, quantity = One)]
     Count,
-    #[property(typ = NodeRef, quantity = One)]
+    #[property(typ = NodeId, quantity = One)]
     Ref,
 }
 
@@ -366,5 +370,5 @@ assert_eq!(
 ```
 
 See [`examples/simple_graph.rs`](examples/simple_graph.rs) for a full, runnable version. It also shows a
-cross-diff edge made via `NodeRef`, and an edge that carries a property. See
+cross-diff edge made via `RawNodeId`, and an edge that carries a property. See
 [`tests/graph_tests.rs`](tests/graph_tests.rs) for more on querying, updating, and removing nodes and edges.

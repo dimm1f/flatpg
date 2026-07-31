@@ -11,8 +11,8 @@ pub mod strings_pool;
 use std::{hash::Hash, str::FromStr};
 
 use crate::{
-    edge::{EdgeHandle, EdgeRef},
-    node::NodeRef,
+    edge::{EdgeHandle, RawEdgeId},
+    node::RawNodeId,
     property::{PropertyType, QuantityType},
 };
 
@@ -22,14 +22,14 @@ pub trait EdgeDirectionKind:
     fn values() -> &'static [Self];
     fn factor(&self) -> usize;
     fn make_edge(
-        src_node_ref: NodeRef,
-        dst_node_ref: NodeRef,
+        src_node_ref: RawNodeId,
+        dst_node_ref: RawNodeId,
         direction: Self,
         edge_handle: EdgeHandle,
-    ) -> EdgeRef;
+    ) -> RawEdgeId;
     fn src_half() -> Self;
     fn dst_half() -> Self;
-    fn orient_edge(&self, src: NodeRef, dst: NodeRef) -> (NodeRef, Self, NodeRef, Self);
+    fn orient_edge(&self, src: RawNodeId, dst: RawNodeId) -> (RawNodeId, Self, RawNodeId, Self);
 }
 
 pub trait ItemAsStr {
