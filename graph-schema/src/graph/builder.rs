@@ -36,7 +36,6 @@ enum Change<S: Schema> {
     RemoveEdge(EdgeRef),
 }
 
-// TODO Ambigous with QuantifiedType
 #[derive(Debug, Clone)]
 pub enum QuantifiedProperty {
     One(PropertyValue),
@@ -354,7 +353,6 @@ impl<S: Schema> GraphDiff<S> {
         Ok(graph)
     }
 
-    // TODO: Needs refactoring
     fn apply_changes(&self, graph: &mut Graph<S>) -> Result<(), Error> {
         for change in &self.changes {
             match change {

@@ -88,7 +88,7 @@ impl<S: Schema> Graph<S> {
             .enumerate()
             .map(move |(seq, _)| NodeId::<S>::new(node_kind, seq))
     }
-    // TODO: this and node_count_by_kind need refactoring
+
     pub fn node_count_by_kind_with_deleted(&self, node_kind: NodeKind<S>) -> usize {
         self.node_meta_storage[node_kind.index()].len()
     }

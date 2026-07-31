@@ -297,7 +297,7 @@ The crate is organized as a small workspace:
 Putting the `SimpleProperty`/`SimpleNode`/`SimpleEdge`/`SimpleSchema` pieces introduced above together with the diff-and-query flow from [Building and applying graphs](#building-and-applying-graphs) gives the complete, runnable program below:
 
 ```rust
-use flatpg::{graph::Graph, graph::GraphDiff, node::NodeRef, prelude::*, schema::Schema};
+use flatpg::{graph::Graph, graph::builder::GraphDiff, node::NodeRef, prelude::*, schema::Schema};
 use graph_schema::edge::Direction;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]

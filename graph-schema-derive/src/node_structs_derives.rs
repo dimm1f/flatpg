@@ -107,7 +107,6 @@ pub fn node_structs_derive(
                 }
 
                 pub fn build(self) -> flatpg::node::NewNode<#schema_ty> {
-                    // TODO: add validation if mandatory fields have not been set
                     self.0
                 }
             }

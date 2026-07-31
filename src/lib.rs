@@ -2,7 +2,7 @@
 //!
 //! Node, edge, and property kinds are defined at compile time via the
 //! [`Schema`](schema::Schema) trait and the derive macros re-exported in
-//! [`prelude`]. Graphs are built up through [`graph::GraphDiff`] and applied
+//! [`prelude`]. Graphs are built up through [`graph::builder::GraphDiff`] and applied
 //! to a [`graph::Graph`], which stores nodes and edges in flat, indexed
 //! storage rather than as a pointer-based structure.
 
