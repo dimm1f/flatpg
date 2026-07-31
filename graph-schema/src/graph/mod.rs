@@ -5,7 +5,9 @@ use crate::{
     node::{NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, EdgeStorageSlot, NodeKind, PropKind, Schema},
-    storage::{EdgeStorage, NodeMetaStorage, PropertyStorage, StorageArray, StoredProperty},
+    storage::{
+        EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StorageArray, StoredProperty,
+    },
     strings_pool::{StringRef, StringsPool},
 };
 
@@ -106,7 +108,7 @@ impl<S: Schema> Graph<S> {
             .property_storage
             .get(slot.offset_index())
             .ok_or_else(|| Error::invalid_slot_index(slot.to_string()))
-            .and_then(StorageArray::try_as_int)?;
+            .and_then(StorageArray::try_as_offset)?;
 
         let indexes = offsets
             .get(node_ref.seq()..=node_ref.seq() + 1)
@@ -115,8 +117,8 @@ impl<S: Schema> Graph<S> {
         let Some([start, end]) = indexes else {
             return Err(Error::property_index_not_found());
         };
-        let start = *start as usize;
-        let end = *end as usize;
+        let start = start.value();
+        let end = end.value();
 
         if start > end || end >= self.property_storage.len() {
             return Err(Error::property_index_out_of_bounds(
@@ -138,11 +140,11 @@ impl<S: Schema> Graph<S> {
         &self,
         node: RawNodeId,
         slot: EdgeStorageSlot,
-    ) -> Result<(i32, i32), Error> {
+    ) -> Result<(Offset, Offset), Error> {
         self.edge_storage
             .get(slot.offset_index())
             .ok_or_else(|| Error::slot_offsets_not_found(slot.to_string()))
-            .and_then(StorageArray::try_as_int)
+            .and_then(StorageArray::try_as_offset)
             .map(|v| v.get(node.seq()..=(node.seq() + 1)))
             .and_then(|o| {
                 if let Some([start, end]) = o {
@@ -160,15 +162,10 @@ impl<S: Schema> Graph<S> {
     ) -> Result<usize, Error> {
         let kind = S::resolve_node_kind(node_ref)?;
         let slot = S::edge_storage_slot(kind, direction, edge_kind);
-        let result = self
-            .get_edges_offset(node_ref, slot)
-            .map(|(start, end)| end - start)
-            .unwrap_or(0);
 
-        if result < 0 {
-            Err(Error::invalid_edge_range())
-        } else {
-            Ok(result as usize)
+        match self.get_edges_offset(node_ref, slot) {
+            Ok((start, end)) => end.checked_sub(start),
+            Err(_) => Ok(0),
         }
     }
 
@@ -181,9 +178,8 @@ impl<S: Schema> Graph<S> {
         let slot = S::edge_storage_slot(src_node.kind(), direction, edge_kind);
         let (start, end) = self.get_edges_offset((&src_node).into(), slot)?;
 
-        let start = start as usize;
-        let end = end as usize;
-        let length = end - start;
+        let length = end.checked_sub(start)?;
+        let start = start.value();
 
         let mut result = Vec::with_capacity(length);
 
@@ -223,7 +219,7 @@ impl<S: Schema> Graph<S> {
         Ok(self
             .edge_storage
             .get(slot.properties_index())
-            .and_then(|v| v.get(start as usize + edge.seq())))
+            .and_then(|v| v.get(start.value() + edge.seq())))
     }
 }
 

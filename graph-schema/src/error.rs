@@ -33,8 +33,10 @@ pub enum Error {
     SlotOffsetsNotFound(String),
     #[error("offsets are not found for node.seq \"{0}\"")]
     NodeOffsetNotFound(usize),
-    #[error("end index less than start")]
-    InvalidEdgeRange,
+    #[error("offset value {0} exceeds the maximum supported offset (u32::MAX)")]
+    OffsetOverflow(usize),
+    #[error("offset arithmetic underflowed: CSR offsets must remain non-decreasing")]
+    OffsetUnderflow,
     #[error("node {node} has more \"{edge_kind} {direction}\" edges than EdgeSeq allows")]
     TooManyEdges {
         node: String,
@@ -114,8 +116,12 @@ impl Error {
         Self::NodeOffsetNotFound(seq)
     }
 
-    pub fn invalid_edge_range() -> Self {
-        Self::InvalidEdgeRange
+    pub fn offset_overflow(value: usize) -> Self {
+        Self::OffsetOverflow(value)
+    }
+
+    pub fn offset_underflow() -> Self {
+        Self::OffsetUnderflow
     }
 
     pub fn too_many_edges(

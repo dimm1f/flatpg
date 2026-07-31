@@ -8,7 +8,7 @@ use crate::{
     node::{NewNode, NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, PropKind, Schema},
-    storage::{EdgeStorage, NodeMetaStorage, PropertyStorage, StoredProperty},
+    storage::{EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StoredProperty},
     strings_pool::StringsPool,
 };
 
@@ -197,8 +197,8 @@ impl<S: Schema> GraphDiff<S> {
 
             // Safety: new_properties has property_storage_size() slots; slot.offset_index() is always in-bounds.
             let offsets = unsafe { new_properties.get_unchecked_mut(slot.offset_index()) }
-                .try_as_int_mut()?;
-            *offsets = vec![0; new_nodes_count[node_kind.index()] + 1];
+                .try_as_offset_mut()?;
+            *offsets = vec![Offset::zero(); new_nodes_count[node_kind.index()] + 1];
         }
 
         for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
@@ -206,8 +206,8 @@ impl<S: Schema> GraphDiff<S> {
 
             // Safety: new_edges has edge_storage_size() slots; slot.offset_index() is always in-bounds.
             let offsets =
-                unsafe { new_edges.get_unchecked_mut(slot.offset_index()) }.try_as_int_mut()?;
-            *offsets = vec![0; new_nodes_count[node_kind.index()] + 1];
+                unsafe { new_edges.get_unchecked_mut(slot.offset_index()) }.try_as_offset_mut()?;
+            *offsets = vec![Offset::zero(); new_nodes_count[node_kind.index()] + 1];
         }
 
         let mut seq_counters = vec![0usize; S::number_of_node_kinds()];
@@ -245,7 +245,7 @@ impl<S: Schema> GraphDiff<S> {
                     .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
             };
 
-            let offsets = offsets.try_as_int_mut()?;
+            let offsets = offsets.try_as_offset_mut()?;
 
             let mut delta = 0;
 
@@ -254,7 +254,7 @@ impl<S: Schema> GraphDiff<S> {
                 let start = end - 1;
 
                 if let Some(props) = seq_property.get(&start) {
-                    let place = offsets[end] as usize + delta;
+                    let place = offsets[end].value() + delta;
                     for (i, prop) in props.iter().enumerate() {
                         let prop = &to_stored_property(prop, &mut graph.strings);
                         storage.try_insert(place + i, prop)?;
@@ -262,15 +262,15 @@ impl<S: Schema> GraphDiff<S> {
                     delta += props.len();
                 }
 
-                offsets[end] += delta as i32
+                offsets[end] = offsets[end].checked_add_delta(delta)?;
             }
         }
 
         // Append new items into the graph
         graph.node_meta_storage.append(new_nodes);
-        graph.property_storage.append(new_properties);
+        graph.property_storage.append(new_properties)?;
         // Initialize the offsers array with new nodes offsets
-        graph.edge_storage.append(new_edges);
+        graph.edge_storage.append(new_edges)?;
 
         let resolve_node_ref = |node: &NewOrExistingNode| -> Option<RawNodeId> {
             match node {
@@ -323,7 +323,7 @@ impl<S: Schema> GraphDiff<S> {
                 ])
             };
 
-            let offsets = offsets.try_as_int_mut()?;
+            let offsets = offsets.try_as_offset_mut()?;
             let neigbors = neigbors.try_as_ref_mut()?;
 
             let mut delta = 0;
@@ -335,7 +335,7 @@ impl<S: Schema> GraphDiff<S> {
                 if let Some(halves) = seq_halves.get(&start) {
                     let new_neighbors = halves.iter().map(|h| RawNodeId::from(&h.neighbor));
 
-                    let place = offsets[end] as usize + delta;
+                    let place = offsets[end].value() + delta;
                     neigbors.splice(place..place, new_neighbors);
                     delta += halves.len();
 
@@ -346,7 +346,7 @@ impl<S: Schema> GraphDiff<S> {
                     }
                 }
 
-                offsets[end] += delta as i32
+                offsets[end] = offsets[end].checked_add_delta(delta)?;
             }
         }
 
@@ -387,20 +387,24 @@ impl<S: Schema> GraphDiff<S> {
                             .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
                     };
 
-                    let offsets = offsets_arr.try_as_int_mut()?;
-                    let start = offsets[node_ref.seq()] as usize;
-                    let end = offsets[node_ref.seq() + 1] as usize;
-                    let old_count = (end - start) as i32;
-                    let delta = stored_values.len() as i32 - old_count;
+                    let offsets = offsets_arr.try_as_offset_mut()?;
+                    let start = offsets[node_ref.seq()];
+                    let end = offsets[node_ref.seq() + 1];
+                    let old_count = end.checked_sub(start)?;
+                    let new_count = stored_values.len();
 
-                    values_arr.try_drain(start..end)?;
+                    values_arr.try_drain(start.value()..end.value())?;
                     for (i, prop) in stored_values.iter().enumerate() {
-                        values_arr.try_insert(start + i, prop)?;
+                        values_arr.try_insert(start.value() + i, prop)?;
                     }
 
                     #[allow(clippy::needless_range_loop)]
                     for i in (node_ref.seq() + 1)..offsets.len() {
-                        offsets[i] += delta;
+                        offsets[i] = if new_count >= old_count {
+                            offsets[i].checked_add_delta(new_count - old_count)?
+                        } else {
+                            offsets[i].checked_sub_delta(old_count - new_count)?
+                        };
                     }
                 }
                 Change::RemoveEdge(edge) => {
@@ -448,8 +452,8 @@ where
         ])
     };
 
-    let offsets = offsets_arr.try_as_int_mut()?;
-    let start = offsets[node_ref.seq()] as usize;
+    let offsets = offsets_arr.try_as_offset_mut()?;
+    let start = offsets[node_ref.seq()].value();
     let idx = start + local_seq;
 
     neighbors_arr.try_drain(idx..idx + 1)?;
@@ -457,7 +461,7 @@ where
 
     #[allow(clippy::needless_range_loop)]
     for i in (node_ref.seq() + 1)..offsets.len() {
-        offsets[i] -= 1;
+        offsets[i] = offsets[i].checked_sub_delta(1)?;
     }
 
     Ok(())
@@ -480,10 +484,10 @@ where
         .edge_storage
         .get(slot.offset_index())
         .ok_or_else(|| Error::invalid_slot_index(slot.to_string()))?
-        .try_as_int()?;
+        .try_as_offset()?;
 
-    let start = offsets[node.seq()] as usize;
-    let end = offsets[node.seq() + 1] as usize;
+    let start = offsets[node.seq()].value();
+    let end = offsets[node.seq() + 1].value();
 
     let neighbors = graph
         .edge_storage

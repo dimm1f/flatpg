@@ -44,12 +44,58 @@ impl StoredProperty {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Offset(u32);
+
+impl Offset {
+    pub(crate) fn new(value: usize) -> Result<Self, Error> {
+        u32::try_from(value)
+            .map(Self)
+            .map_err(|_| Error::offset_overflow(value))
+    }
+
+    pub(crate) fn zero() -> Self {
+        Self(0)
+    }
+
+    pub fn value(&self) -> usize {
+        self.0 as usize
+    }
+
+    /// `self - rhs`, as a plain length. Fails if `rhs > self` (offsets not non-decreasing).
+    pub(crate) fn checked_sub(self, rhs: Self) -> Result<usize, Error> {
+        self.0
+            .checked_sub(rhs.0)
+            .map(|v| v as usize)
+            .ok_or_else(Error::offset_underflow)
+    }
+
+    /// `self + delta`. Fails if the result (or `delta` itself) doesn't fit in `u32`.
+    pub(crate) fn checked_add_delta(self, delta: usize) -> Result<Self, Error> {
+        let delta = u32::try_from(delta).map_err(|_| Error::offset_overflow(delta))?;
+        self.0
+            .checked_add(delta)
+            .map(Self)
+            .ok_or_else(|| Error::offset_overflow(self.value().saturating_add(delta as usize)))
+    }
+
+    /// `self - delta`. Fails if `delta > self` (offsets not non-decreasing).
+    pub(crate) fn checked_sub_delta(self, delta: usize) -> Result<Self, Error> {
+        let delta = u32::try_from(delta).map_err(|_| Error::offset_underflow())?;
+        self.0
+            .checked_sub(delta)
+            .map(Self)
+            .ok_or_else(Error::offset_underflow)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum StorageArray {
     Bool(Vec<bool>),
     Byte(Vec<u8>),
     Short(Vec<i16>),
     Int(Vec<i32>),
+    Offset(Vec<Offset>),
     Long(Vec<i64>),
     Float(Vec<f32>),
     Double(Vec<f64>),
@@ -83,6 +129,7 @@ impl StorageArray {
             StorageArray::Byte(_) => PropertyType::Byte,
             StorageArray::Short(_) => PropertyType::Short,
             StorageArray::Int(_) => PropertyType::Int,
+            StorageArray::Offset(_) => PropertyType::None,
             StorageArray::Long(_) => PropertyType::Long,
             StorageArray::Float(_) => PropertyType::Float,
             StorageArray::Double(_) => PropertyType::Double,
@@ -99,6 +146,7 @@ impl StorageArray {
             StorageArray::Byte(v) => v.get(index).copied().map(StoredProperty::Byte),
             StorageArray::Short(v) => v.get(index).copied().map(StoredProperty::Short),
             StorageArray::Int(v) => v.get(index).copied().map(StoredProperty::Int),
+            StorageArray::Offset(_) => None,
             StorageArray::Long(v) => v.get(index).copied().map(StoredProperty::Long),
             StorageArray::Float(v) => v.get(index).copied().map(StoredProperty::Float),
             StorageArray::Double(v) => v.get(index).copied().map(StoredProperty::Double),
@@ -183,6 +231,9 @@ impl StorageArray {
             StorageArray::Int(v) => {
                 v.drain(range);
             }
+            StorageArray::Offset(v) => {
+                v.drain(range);
+            }
             StorageArray::Long(v) => {
                 v.drain(range);
             }
@@ -212,6 +263,7 @@ impl StorageArray {
             StorageArray::Byte(items) => items.len(),
             StorageArray::Short(items) => items.len(),
             StorageArray::Int(items) => items.len(),
+            StorageArray::Offset(items) => items.len(),
             StorageArray::Long(items) => items.len(),
             StorageArray::Float(items) => items.len(),
             StorageArray::Double(items) => items.len(),
@@ -279,6 +331,20 @@ impl StorageArray {
         match self {
             Self::Int(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::Int)),
+        }
+    }
+
+    pub fn try_as_offset(&self) -> Result<&Vec<Offset>, Error> {
+        match self {
+            Self::Offset(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::None)),
+        }
+    }
+
+    pub fn try_as_offset_mut(&mut self) -> Result<&mut Vec<Offset>, Error> {
+        match self {
+            Self::Offset(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::None)),
         }
     }
 
@@ -394,6 +460,13 @@ impl StorageArray {
         }
     }
 
+    pub fn try_into_offset(self) -> Result<Vec<Offset>, Error> {
+        match self {
+            Self::Offset(items) => Ok(items),
+            _ => Err(self.casting_error(PropertyType::None)),
+        }
+    }
+
     pub fn try_into_long(self) -> Result<Vec<i64>, Error> {
         match self {
             Self::Long(items) => Ok(items),
@@ -438,6 +511,10 @@ impl StorageArray {
 
     fn casting_error(&self, target: PropertyType) -> Error {
         Error::invalid_property_type(target, self.typ())
+    }
+
+    pub(crate) fn new_offsets() -> Self {
+        Self::Offset(Vec::new())
     }
 }
 
@@ -504,7 +581,7 @@ impl<S: Schema> EdgeStorage<S> {
                     slot.properties_index(),
                 ])
             };
-            *offsets = StorageArray::new(PropertyType::Int);
+            *offsets = StorageArray::new_offsets();
             *neighbors = StorageArray::new(PropertyType::NodeId);
             *properties = StorageArray::new(S::edge_property_type(edge_kind));
         }
@@ -514,7 +591,7 @@ impl<S: Schema> EdgeStorage<S> {
         }
     }
 
-    pub(crate) fn append(&mut self, mut other: Self) {
+    pub(crate) fn append(&mut self, mut other: Self) -> Result<(), Error> {
         for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
             let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
 
@@ -526,7 +603,7 @@ impl<S: Schema> EdgeStorage<S> {
                     slot.properties_index(),
                 ])
             };
-            let offsets = offsets.try_as_int_mut().unwrap();
+            let offsets = offsets.try_as_offset_mut().unwrap();
 
             // Safety: storage has edge_storage_size() slots; same bounds/disjointness as above; separate vec, no aliasing with self.0.
             let [other_offsets, other_neighbors, other_properties] = unsafe {
@@ -536,14 +613,14 @@ impl<S: Schema> EdgeStorage<S> {
                     slot.properties_index(),
                 ])
             };
-            let other_offsets = other_offsets.try_as_int().unwrap();
+            let other_offsets = other_offsets.try_as_offset().unwrap();
 
-            let start_offset = offsets.last().copied().unwrap_or(0);
+            let start_offset = offsets.last().copied().unwrap_or_else(Offset::zero);
             offsets.reserve(other_offsets.len());
 
             let start = if offsets.is_empty() { 0 } else { 1 };
             for &offset in &other_offsets[start..] {
-                offsets.push(offset + start_offset);
+                offsets.push(Offset::new(offset.value() + start_offset.value())?);
             }
 
             assert_eq!(neighbors.typ(), other_neighbors.typ());
@@ -552,6 +629,7 @@ impl<S: Schema> EdgeStorage<S> {
             assert_eq!(properties.typ(), other_properties.typ());
             properties.try_append(other_properties).unwrap();
         }
+        Ok(())
     }
 }
 
@@ -601,7 +679,7 @@ impl<S: Schema> PropertyStorage<S> {
             let [offsets, values] = unsafe {
                 storage.get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
             };
-            *offsets = StorageArray::new(PropertyType::Int);
+            *offsets = StorageArray::new_offsets();
             *values = StorageArray::new(S::node_property_type(property_kind));
         }
         Self {
@@ -610,7 +688,7 @@ impl<S: Schema> PropertyStorage<S> {
         }
     }
 
-    pub(crate) fn append(&mut self, mut other: Self) {
+    pub(crate) fn append(&mut self, mut other: Self) -> Result<(), Error> {
         for (node_kind, property_kind) in S::property_storage_slots_iter() {
             let slot = S::property_storage_slot(node_kind, property_kind);
 
@@ -620,7 +698,7 @@ impl<S: Schema> PropertyStorage<S> {
                     .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
             };
             // Panic: The storage is build based on schema, so the properties have right types
-            let offsets = offsets.try_as_int_mut().unwrap();
+            let offsets = offsets.try_as_offset_mut().unwrap();
 
             // Safety: other.0 has property_storage_size() slots; same bounds/disjointness as above; separate vec, no aliasing with self.0.
             let [other_offsets, other_values] = unsafe {
@@ -628,19 +706,20 @@ impl<S: Schema> PropertyStorage<S> {
                     .storage
                     .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
             };
-            let other_offsets = other_offsets.try_as_int().unwrap();
+            let other_offsets = other_offsets.try_as_offset().unwrap();
 
-            let start_offset = offsets.last().copied().unwrap_or(0);
+            let start_offset = offsets.last().copied().unwrap_or_else(Offset::zero);
             offsets.reserve(other_offsets.len());
 
             let start = if offsets.is_empty() { 0 } else { 1 };
             for &offset in &other_offsets[start..] {
-                offsets.push(offset + start_offset);
+                offsets.push(Offset::new(offset.value() + start_offset.value())?);
             }
 
             assert_eq!(values.typ(), other_values.typ());
             values.try_append(other_values).unwrap();
         }
+        Ok(())
     }
 }
 
