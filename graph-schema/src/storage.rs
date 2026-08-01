@@ -5,12 +5,12 @@ use std::{
 
 use crate::{
     ItemIndex,
-    enum_property::EnumRef,
+    enum_property::RawEnumId,
     error::Error,
     node::{NodeMeta, RawNodeId},
     property::PropertyType,
     schema::Schema,
-    strings_pool::StringRef,
+    strings_pool::RawStringId,
 };
 
 #[derive(Debug, Clone)]
@@ -23,8 +23,8 @@ pub enum StoredProperty {
     Float(f32),
     Double(f64),
     NodeId(RawNodeId),
-    StringRef(StringRef),
-    Enum(EnumRef),
+    StringId(RawStringId),
+    Enum(RawEnumId),
 }
 
 impl StoredProperty {
@@ -38,7 +38,7 @@ impl StoredProperty {
             StoredProperty::Float(_) => PropertyType::Float,
             StoredProperty::Double(_) => PropertyType::Double,
             StoredProperty::NodeId(_) => PropertyType::NodeId,
-            StoredProperty::StringRef(_) => PropertyType::String,
+            StoredProperty::StringId(_) => PropertyType::String,
             StoredProperty::Enum(_) => PropertyType::Enum,
         }
     }
@@ -100,8 +100,8 @@ pub enum StorageArray {
     Float(Vec<f32>),
     Double(Vec<f64>),
     NodeId(Vec<RawNodeId>),
-    StringRef(Vec<StringRef>),
-    Enum(Vec<EnumRef>),
+    StringId(Vec<RawStringId>),
+    Enum(Vec<RawEnumId>),
     #[default]
     None,
 }
@@ -118,7 +118,7 @@ impl StorageArray {
             PropertyType::Float => Self::Float(Vec::new()),
             PropertyType::Double => Self::Double(Vec::new()),
             PropertyType::NodeId => Self::NodeId(Vec::new()),
-            PropertyType::String => Self::StringRef(Vec::new()),
+            PropertyType::String => Self::StringId(Vec::new()),
             PropertyType::Enum => Self::Enum(Vec::new()),
         }
     }
@@ -134,7 +134,7 @@ impl StorageArray {
             StorageArray::Float(_) => PropertyType::Float,
             StorageArray::Double(_) => PropertyType::Double,
             StorageArray::NodeId(_) => PropertyType::NodeId,
-            StorageArray::StringRef(_) => PropertyType::String,
+            StorageArray::StringId(_) => PropertyType::String,
             StorageArray::Enum(_) => PropertyType::Enum,
             StorageArray::None => PropertyType::None,
         }
@@ -151,7 +151,7 @@ impl StorageArray {
             StorageArray::Float(v) => v.get(index).copied().map(StoredProperty::Float),
             StorageArray::Double(v) => v.get(index).copied().map(StoredProperty::Double),
             StorageArray::NodeId(v) => v.get(index).cloned().map(StoredProperty::NodeId),
-            StorageArray::StringRef(v) => v.get(index).cloned().map(StoredProperty::StringRef),
+            StorageArray::StringId(v) => v.get(index).cloned().map(StoredProperty::StringId),
             StorageArray::Enum(v) => v.get(index).copied().map(StoredProperty::Enum),
             StorageArray::None => None,
         }
@@ -169,7 +169,7 @@ impl StorageArray {
             (StorageArray::Float(storage), StoredProperty::Float(v)) => storage.push(*v),
             (StorageArray::Double(storage), StoredProperty::Double(v)) => storage.push(*v),
             (StorageArray::NodeId(storage), StoredProperty::NodeId(v)) => storage.push(*v),
-            (StorageArray::StringRef(storage), StoredProperty::StringRef(v)) => storage.push(*v),
+            (StorageArray::StringId(storage), StoredProperty::StringId(v)) => storage.push(*v),
             (StorageArray::Enum(storage), StoredProperty::Enum(v)) => storage.push(*v),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
         }
@@ -188,7 +188,7 @@ impl StorageArray {
             (StorageArray::Float(storage), StorageArray::Float(v)) => storage.append(v),
             (StorageArray::Double(storage), StorageArray::Double(v)) => storage.append(v),
             (StorageArray::NodeId(storage), StorageArray::NodeId(v)) => storage.append(v),
-            (StorageArray::StringRef(storage), StorageArray::StringRef(v)) => storage.append(v),
+            (StorageArray::StringId(storage), StorageArray::StringId(v)) => storage.append(v),
             (StorageArray::Enum(storage), StorageArray::Enum(v)) => storage.append(v),
             (StorageArray::None, StorageArray::None) => (),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
@@ -208,9 +208,7 @@ impl StorageArray {
             (StorageArray::Float(storage), StoredProperty::Float(v)) => storage.insert(i, *v),
             (StorageArray::Double(storage), StoredProperty::Double(v)) => storage.insert(i, *v),
             (StorageArray::NodeId(storage), StoredProperty::NodeId(v)) => storage.insert(i, *v),
-            (StorageArray::StringRef(storage), StoredProperty::StringRef(v)) => {
-                storage.insert(i, *v)
-            }
+            (StorageArray::StringId(storage), StoredProperty::StringId(v)) => storage.insert(i, *v),
             (StorageArray::Enum(storage), StoredProperty::Enum(v)) => storage.insert(i, *v),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
         }
@@ -246,7 +244,7 @@ impl StorageArray {
             StorageArray::NodeId(v) => {
                 v.drain(range);
             }
-            StorageArray::StringRef(v) => {
+            StorageArray::StringId(v) => {
                 v.drain(range);
             }
             StorageArray::Enum(v) => {
@@ -268,7 +266,7 @@ impl StorageArray {
             StorageArray::Float(items) => items.len(),
             StorageArray::Double(items) => items.len(),
             StorageArray::NodeId(node_ref) => node_ref.len(),
-            StorageArray::StringRef(items) => items.len(),
+            StorageArray::StringId(items) => items.len(),
             StorageArray::Enum(items) => items.len(),
             StorageArray::None => 1,
         }
@@ -390,44 +388,44 @@ impl StorageArray {
         }
     }
 
-    pub fn try_as_ref(&self) -> Result<&Vec<RawNodeId>, Error> {
+    pub fn try_as_node_id(&self) -> Result<&Vec<RawNodeId>, Error> {
         match self {
             Self::NodeId(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::NodeId)),
         }
     }
 
-    pub fn try_as_ref_mut(&mut self) -> Result<&mut Vec<RawNodeId>, Error> {
+    pub fn try_as_node_id_mut(&mut self) -> Result<&mut Vec<RawNodeId>, Error> {
         match self {
             Self::NodeId(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::NodeId)),
         }
     }
 
-    pub fn try_as_enum(&self) -> Result<&Vec<EnumRef>, Error> {
+    pub fn try_as_enum(&self) -> Result<&Vec<RawEnumId>, Error> {
         match self {
             Self::Enum(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::Enum)),
         }
     }
 
-    pub fn try_as_enum_mut(&mut self) -> Result<&mut Vec<EnumRef>, Error> {
+    pub fn try_as_enum_mut(&mut self) -> Result<&mut Vec<RawEnumId>, Error> {
         match self {
             Self::Enum(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::Enum)),
         }
     }
 
-    pub fn try_as_string(&self) -> Result<&Vec<StringRef>, Error> {
+    pub fn try_as_string(&self) -> Result<&Vec<RawStringId>, Error> {
         match self {
-            Self::StringRef(items) => Ok(items),
+            Self::StringId(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::String)),
         }
     }
 
-    pub fn try_as_string_mut(&mut self) -> Result<&mut Vec<StringRef>, Error> {
+    pub fn try_as_string_mut(&mut self) -> Result<&mut Vec<RawStringId>, Error> {
         match self {
-            Self::StringRef(items) => Ok(items),
+            Self::StringId(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::String)),
         }
     }
@@ -488,21 +486,21 @@ impl StorageArray {
         }
     }
 
-    pub fn try_into_ref(self) -> Result<Vec<RawNodeId>, Error> {
+    pub fn try_into_node_id(self) -> Result<Vec<RawNodeId>, Error> {
         match self {
             Self::NodeId(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::NodeId)),
         }
     }
 
-    pub fn try_into_string(self) -> Result<Vec<StringRef>, Error> {
+    pub fn try_into_string(self) -> Result<Vec<RawStringId>, Error> {
         match self {
-            Self::StringRef(items) => Ok(items),
+            Self::StringId(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::String)),
         }
     }
 
-    pub fn try_into_enum(self) -> Result<Vec<EnumRef>, Error> {
+    pub fn try_into_enum(self) -> Result<Vec<RawEnumId>, Error> {
         match self {
             Self::Enum(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::Enum)),

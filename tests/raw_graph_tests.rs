@@ -6,7 +6,7 @@ use flatpg::{
     property::PropertyValue,
     schema::Schema,
     storage::StorageArray,
-    strings_pool::StringRef,
+    strings_pool::RawStringId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumProperty)]
@@ -279,7 +279,7 @@ fn storage_type_mismatch_is_rejected() {
 }
 
 #[test]
-fn dangling_node_ref_out_of_bounds_is_rejected() {
+fn dangling_node_id_out_of_bounds_is_rejected() {
     let mut setup = GraphDiff::<TestSchema>::default();
     let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
@@ -296,8 +296,8 @@ fn dangling_node_ref_out_of_bounds_is_rejected() {
 }
 
 #[test]
-fn foreign_string_ref_is_rejected() {
-    // graph_a interns 3 strings ("foo", "extra1", "extra2"); take the ref to the *last* one so
+fn foreign_string_id_is_rejected() {
+    // graph_a interns 3 strings ("foo", "extra1", "extra2"); take the id of the *last* one so
     // its index is guaranteed to exceed graph_b's much smaller pool, rather than coincidentally
     // aliasing index 0 in both pools (every fresh graph interns its first string at index 0).
     let mut diff_a = GraphDiff::<TestSchema>::default();
@@ -314,7 +314,7 @@ fn foreign_string_ref_is_rejected() {
     let graph_a = diff_a.apply(Graph::new()).expect("apply a");
     let raw_a: RawGraph<TestSchema> = graph_a.into();
     let values_slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values);
-    let foreign_ref: StringRef = raw_a.property_storage[values_slot.values_index()]
+    let foreign_id: RawStringId = raw_a.property_storage[values_slot.values_index()]
         .try_as_string()
         .unwrap()[1];
 
@@ -330,12 +330,12 @@ fn foreign_string_ref_is_rejected() {
     let key_slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Key);
     raw_b.property_storage[key_slot.values_index()]
         .try_as_string_mut()
-        .unwrap()[0] = foreign_ref;
+        .unwrap()[0] = foreign_id;
 
     let err = Graph::<TestSchema>::try_from(raw_b)
         .err()
         .expect("expected an error");
-    assert!(matches!(err, Error::UnresolvedStringRef(_)));
+    assert!(matches!(err, Error::UnresolvedStringId(_)));
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn unpaired_half_edge_is_rejected() {
     let last = offsets.len() - 1;
     offsets[last] = zero;
     raw.edge_storage[in_plain.neighbors_index()]
-        .try_as_ref_mut()
+        .try_as_node_id_mut()
         .unwrap()
         .clear();
 
@@ -403,7 +403,7 @@ fn parallel_edge_degree_mismatch_is_rejected() {
     let last = offsets.len() - 1;
     offsets[last] = one;
     raw.edge_storage[beta_in_plain.neighbors_index()]
-        .try_as_ref_mut()
+        .try_as_node_id_mut()
         .unwrap()
         .pop();
 

@@ -9,7 +9,7 @@ use crate::{
     storage::{
         EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StorageArray, StoredProperty,
     },
-    strings_pool::{StringRef, StringsPool},
+    strings_pool::{RawStringId, StringsPool},
 };
 
 pub mod builder;
@@ -33,10 +33,10 @@ impl<S: Schema> Graph<S> {
         }
     }
 
-    pub fn resolve_string(&self, str_ref: StringRef) -> Result<&str, Error> {
+    pub fn resolve_string(&self, string_id: RawStringId) -> Result<&str, Error> {
         self.strings
-            .get(str_ref)
-            .ok_or_else(|| Error::unresolved_string_ref(str_ref.to_string()))
+            .get(string_id)
+            .ok_or_else(|| Error::unresolved_string_id(string_id.to_string()))
     }
 
     /// Converts a [`StoredProperty`] into a self-contained [`PropertyValue`],
@@ -51,8 +51,8 @@ impl<S: Schema> Graph<S> {
             StoredProperty::Float(v) => PropertyValue::Float(v),
             StoredProperty::Double(v) => PropertyValue::Double(v),
             StoredProperty::NodeId(v) => PropertyValue::NodeId(v),
-            StoredProperty::StringRef(str_ref) => {
-                PropertyValue::String(self.resolve_string(str_ref)?.to_owned())
+            StoredProperty::StringId(string_id) => {
+                PropertyValue::String(self.resolve_string(string_id)?.to_owned())
             }
             StoredProperty::Enum(v) => PropertyValue::Enum(v),
         })

@@ -64,8 +64,8 @@ pub enum Error {
         direction: String,
         edge_kind: String,
     },
-    #[error("failed to resolve string ref \"{0}\"")]
-    UnresolvedStringRef(String),
+    #[error("failed to resolve string id \"{0}\"")]
+    UnresolvedStringId(String),
     #[error("failed to resolve variant {variant} for enum \"{enum_name}\"")]
     UnresolvedEnumVariant { enum_name: String, variant: usize },
     #[error(
@@ -201,8 +201,8 @@ impl Error {
         }
     }
 
-    pub fn unresolved_string_ref(str_ref: impl Into<String>) -> Self {
-        Self::UnresolvedStringRef(str_ref.into())
+    pub fn unresolved_string_id(string_id: impl Into<String>) -> Self {
+        Self::UnresolvedStringId(string_id.into())
     }
 
     pub fn unresolved_enum_variant(enum_name: impl Into<String>, variant: usize) -> Self {

@@ -67,7 +67,7 @@ impl Schema for TestSchema {
 
 fn string_value(graph: &Graph<TestSchema>, prop: StoredProperty) -> String {
     match prop {
-        StoredProperty::StringRef(v) => graph
+        StoredProperty::StringId(v) => graph
             .resolve_string(v)
             .expect("string ref resolves")
             .to_string(),

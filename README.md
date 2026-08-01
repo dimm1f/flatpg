@@ -217,7 +217,7 @@ let graph: Graph<SimpleSchema> = raw.try_into().expect("still a well-formed grap
 
 `Graph<S> -> RawGraph<S>` (via `From`) is infallible. The reverse (`RawGraph<S> -> Graph<S>`, via `TryFrom`) runs a full integrity check first — offset arrays well-formed and in bounds, storage slot types matching the schema, node/string/enum refs resolvable, and edge halves correctly paired — and returns `Err` on the first violation found. That check is also exposed directly through the `CheckIntegrity<S>` trait, implemented for both `RawGraph<S>` and `Graph<S>`, so it can be called without a conversion (useful in tests or for asserting an already-built graph is still well-formed).
 
-Known limitation: enum property validation confirms an `EnumRef` belongs to *some* registered enum with an in-range variant, not that it belongs to the *specific* enum a given property or edge slot declares. Half-edge pairing validates that mirrored halves exist in matching numbers, not that their property values agree with each other.
+Known limitation: enum property validation confirms a `RawEnumId` belongs to *some* registered enum with an in-range variant, not that it belongs to the *specific* enum a given property or edge slot declares. Half-edge pairing validates that mirrored halves exist in matching numbers, not that their property values agree with each other.
 
 ### Identifiers and references
 
@@ -274,9 +274,9 @@ A bare `PropertyValue` converts into `One`, and a `Vec<PropertyValue>` converts 
 
 #### `StoredProperty`
 
-The resolved-in-storage form of a property, as returned by `Graph::get_node_property`/`get_edge_property`. It mirrors `PropertyValue`, except strings stay interned (`StringRef`) until resolved:
+The resolved-in-storage form of a property, as returned by `Graph::get_node_property`/`get_edge_property`. It mirrors `PropertyValue`, except strings stay interned (`RawStringId`) until resolved:
 
-`Graph::resolve_property` turns a `StoredProperty` into an owned `PropertyValue`, resolving any interned string. Note that resolving a `StringRef` allocates: it clones the interned string into a new owned `String`, so calling this on a `String`-typed property is not free. In practice both types are rarely touched directly: the derives generate typed accessors that do this conversion automatically — `NewNode::add_property(prop_kind, value)` for building nodes, and per-property read methods like `.key()`, `.values()`, `.count()`, `.r#ref()`, `.state()` for reading them back. (`.r#ref()` is a raw identifier, since a `Ref` property collides with the `ref` keyword.)
+`Graph::resolve_property` turns a `StoredProperty` into an owned `PropertyValue`, resolving any interned string. Note that resolving a `RawStringId` allocates: it clones the interned string into a new owned `String`, so calling this on a `String`-typed property is not free. In practice both types are rarely touched directly: the derives generate typed accessors that do this conversion automatically — `NewNode::add_property(prop_kind, value)` for building nodes, and per-property read methods like `.key()`, `.values()`, `.count()`, `.r#ref()`, `.state()` for reading them back. (`.r#ref()` is a raw identifier, since a `Ref` property collides with the `ref` keyword.)
 
 ### Errors
 

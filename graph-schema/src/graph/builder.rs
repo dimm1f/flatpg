@@ -324,7 +324,7 @@ impl<S: Schema> GraphDiff<S> {
             };
 
             let offsets = offsets.try_as_offset_mut()?;
-            let neigbors = neigbors.try_as_ref_mut()?;
+            let neigbors = neigbors.try_as_node_id_mut()?;
 
             let mut delta = 0;
 
@@ -408,7 +408,7 @@ impl<S: Schema> GraphDiff<S> {
                     }
                 }
                 Change::RemoveEdge(edge) => {
-                    let src = edge.src_node_ref();
+                    let src = edge.src_node_id();
                     let dst = edge.dst();
                     let edge_kind = S::resolve_edge_kind(edge.handle())?;
                     let seq = edge.handle().seq();
@@ -493,7 +493,7 @@ where
         .edge_storage
         .get(slot.neighbors_index())
         .ok_or_else(|| Error::neighbor_not_found(slot.neighbors_index()))?
-        .try_as_ref()?;
+        .try_as_node_id()?;
 
     neighbors[start..end]
         .iter()
@@ -550,7 +550,7 @@ fn to_stored_property(prop: &PropertyValue, strings: &mut StringsPool) -> Stored
         PropertyValue::Float(v) => StoredProperty::Float(*v),
         PropertyValue::Double(v) => StoredProperty::Double(*v),
         PropertyValue::NodeId(node_ref) => StoredProperty::NodeId(*node_ref),
-        PropertyValue::String(s) => StoredProperty::StringRef(strings.intern(s)),
+        PropertyValue::String(s) => StoredProperty::StringId(strings.intern(s)),
         PropertyValue::Enum(v) => StoredProperty::Enum(*v),
     }
 }

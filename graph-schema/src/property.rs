@@ -2,7 +2,7 @@ use core::fmt;
 
 use crate::{
     EnumPropertyIndex,
-    enum_property::EnumRef,
+    enum_property::RawEnumId,
     error::Error,
     node::{NodeId, RawNodeId},
     schema::Schema,
@@ -60,7 +60,7 @@ pub enum PropertyValue {
     Double(f64),
     NodeId(RawNodeId),
     String(String),
-    Enum(EnumRef),
+    Enum(RawEnumId),
 }
 
 impl PropertyValue {
@@ -137,7 +137,7 @@ impl<S: Schema> From<NodeId<S>> for PropertyValue {
 impl<T: EnumPropertyIndex> From<T> for PropertyValue {
     fn from(value: T) -> Self {
         let variant = value.index();
-        PropertyValue::Enum(EnumRef::new(T::enum_property_index(), variant))
+        PropertyValue::Enum(RawEnumId::new(T::enum_property_index(), variant))
     }
 }
 

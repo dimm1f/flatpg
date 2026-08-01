@@ -53,13 +53,13 @@ impl EdgeDirectionKind for Direction {
     fn make_edge(src: RawNodeId, dst: RawNodeId, direction: Self, handle: EdgeHandle) -> RawEdgeId {
         match direction {
             Direction::In => RawEdgeId {
-                src_node_ref: dst,
-                dst_node_ref: src,
+                src_node_id: dst,
+                dst_node_id: src,
                 handle,
             },
             Direction::Out => RawEdgeId {
-                src_node_ref: src,
-                dst_node_ref: dst,
+                src_node_id: src,
+                dst_node_id: dst,
                 handle,
             },
         }
@@ -143,29 +143,25 @@ impl<S: Schema> From<&EdgeId<S>> for EdgeHandle {
 }
 
 pub struct RawEdgeId {
-    src_node_ref: RawNodeId,
-    dst_node_ref: RawNodeId,
+    src_node_id: RawNodeId,
+    dst_node_id: RawNodeId,
     handle: EdgeHandle,
 }
 
 impl RawEdgeId {
-    pub(crate) fn new(
-        src_node_ref: RawNodeId,
-        dst_node_ref: RawNodeId,
-        handle: EdgeHandle,
-    ) -> Self {
+    pub(crate) fn new(src_node_id: RawNodeId, dst_node_id: RawNodeId, handle: EdgeHandle) -> Self {
         Self {
-            src_node_ref,
-            dst_node_ref,
+            src_node_id,
+            dst_node_id,
             handle,
         }
     }
-    pub fn src_node_ref(&self) -> RawNodeId {
-        self.src_node_ref
+    pub fn src_node_id(&self) -> RawNodeId {
+        self.src_node_id
     }
 
     pub fn dst(&self) -> RawNodeId {
-        self.dst_node_ref
+        self.dst_node_id
     }
 
     pub fn handle(&self) -> EdgeHandle {
@@ -234,8 +230,8 @@ impl<S: Schema> TryFrom<RawEdgeId> for EdgeId<S> {
     type Error = Error;
 
     fn try_from(value: RawEdgeId) -> Result<Self, Self::Error> {
-        let src_node = value.src_node_ref.try_into()?;
-        let dst_node = value.dst_node_ref.try_into()?;
+        let src_node = value.src_node_id.try_into()?;
+        let dst_node = value.dst_node_id.try_into()?;
         let kind = S::resolve_edge_kind(value.handle())?;
         let direction = S::resolve_edge_direction(value.handle())?;
 

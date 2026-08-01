@@ -9,12 +9,12 @@ use crate::{EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex, ItemFromStr
 /// variant (`variant`, assigned by `#[derive(EnumProperty)]`'s `ItemIndex` on the domain enum
 /// itself).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EnumRef {
+pub struct RawEnumId {
     enum_property_index: u16,
     variant: u16,
 }
 
-impl EnumRef {
+impl RawEnumId {
     pub(crate) fn new(enum_property_index: usize, variant: usize) -> Self {
         assert!(enum_property_index <= u16::MAX as usize);
         assert!(variant <= u16::MAX as usize);
@@ -33,11 +33,11 @@ impl EnumRef {
     }
 }
 
-impl fmt::Display for EnumRef {
+impl fmt::Display for RawEnumId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "EnumRef({},{})",
+            "RawEnumId({},{})",
             self.enum_property_index(),
             self.variant()
         )

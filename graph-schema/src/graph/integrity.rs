@@ -8,7 +8,7 @@
 //! this check before returning a valid [`Graph<S>`].
 //!
 //! Known limitations:
-//! - Enum reference checks only confirm that an [`EnumRef`] points to *some* registered enum
+//! - Enum id checks only confirm that a [`RawEnumId`] points to *some* registered enum
 //!   with a valid variant. They do not confirm it is the *specific* enum that a property or
 //!   edge slot's schema expects. That would need a schema API this crate does not have yet: a
 //!   way to ask "which registry index does this Enum-typed kind expect?"
@@ -21,13 +21,13 @@ use std::collections::HashMap;
 use crate::{
     EnumPropertyRegistry, ItemAsStr, ItemIndex,
     edge::Direction,
-    enum_property::EnumRef,
+    enum_property::RawEnumId,
     error::Error,
     node::RawNodeId,
     property::PropertyType,
     schema::Schema,
     storage::{EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StorageArray},
-    strings_pool::{StringRef, StringsPool},
+    strings_pool::{RawStringId, StringsPool},
 };
 
 /// Verifies a graph's flat storage is well-formed. See the module docs for known limitations.
@@ -79,7 +79,7 @@ pub(crate) fn check_integrity<S: Schema>(
         check_storage_type(neighbors_arr, PropertyType::NodeId)?;
         check_offsets_bounds(&slot_name, offsets, neighbors_arr.len())?;
         check_values_content::<S>(neighbors_arr, node_meta_storage, strings)?;
-        let neighbors = neighbors_arr.try_as_ref()?;
+        let neighbors = neighbors_arr.try_as_node_id()?;
 
         let properties_arr = &edge_storage[slot.properties_index()];
         let expected_prop_type = S::edge_property_type(edge_kind);
@@ -192,7 +192,7 @@ fn check_storage_type(storage: &StorageArray, expected: PropertyType) -> Result<
     }
 }
 
-/// Validates every `RawNodeId`/`StringRef`/`EnumRef` embedded in a storage array, whatever its
+/// Validates every `RawNodeId`/`RawStringId`/`RawEnumId` embedded in a storage array, whatever its
 /// variant turns out to be. A no-op for scalar-typed or empty/`None` arrays.
 fn check_values_content<S: Schema>(
     storage: &StorageArray,
@@ -205,14 +205,14 @@ fn check_values_content<S: Schema>(
                 check_node_id::<S>(node, node_meta_storage)?;
             }
         }
-        StorageArray::StringRef(items) => {
-            for &str_ref in items {
-                check_string_ref(str_ref, strings)?;
+        StorageArray::StringId(items) => {
+            for &string_id in items {
+                check_string_id(string_id, strings)?;
             }
         }
         StorageArray::Enum(items) => {
-            for &enum_ref in items {
-                check_enum_ref::<S::EPR>(enum_ref)?;
+            for &enum_id in items {
+                check_enum_id::<S::EPR>(enum_id)?;
             }
         }
         _ => {}
@@ -236,20 +236,20 @@ fn check_node_id<S: Schema>(
     Ok(())
 }
 
-fn check_string_ref(str_ref: StringRef, strings: &StringsPool) -> Result<(), Error> {
-    if strings.get(str_ref).is_none() {
-        return Err(Error::unresolved_string_ref(str_ref.to_string()));
+fn check_string_id(string_id: RawStringId, strings: &StringsPool) -> Result<(), Error> {
+    if strings.get(string_id).is_none() {
+        return Err(Error::unresolved_string_id(string_id.to_string()));
     }
     Ok(())
 }
 
-fn check_enum_ref<EPR: EnumPropertyRegistry>(enum_ref: EnumRef) -> Result<(), Error> {
-    let registry_kind = EPR::from_index(enum_ref.enum_property_index())
-        .ok_or_else(|| Error::unresolved_enum_kind(enum_ref.enum_property_index()))?;
-    if enum_ref.variant() >= registry_kind.variant_count() {
+fn check_enum_id<EPR: EnumPropertyRegistry>(enum_id: RawEnumId) -> Result<(), Error> {
+    let registry_kind = EPR::from_index(enum_id.enum_property_index())
+        .ok_or_else(|| Error::unresolved_enum_kind(enum_id.enum_property_index()))?;
+    if enum_id.variant() >= registry_kind.variant_count() {
         return Err(Error::unresolved_enum_variant(
             registry_kind.as_str(),
-            enum_ref.variant(),
+            enum_id.variant(),
         ));
     }
     Ok(())
@@ -368,19 +368,19 @@ mod tests {
     }
 
     #[test]
-    fn string_ref_accepts_valid_ref() {
+    fn string_id_accepts_valid_id() {
         let mut pool = StringsPool::new();
         let valid = pool.intern("foo");
-        assert!(check_string_ref(valid, &pool).is_ok());
+        assert!(check_string_id(valid, &pool).is_ok());
     }
 
     #[test]
-    fn string_ref_rejects_foreign_ref() {
+    fn string_id_rejects_foreign_id() {
         let mut pool_a = StringsPool::new();
         let foreign = pool_a.intern("foo");
         let pool_b = StringsPool::new();
-        let err = check_string_ref(foreign, &pool_b).unwrap_err();
-        assert!(matches!(err, Error::UnresolvedStringRef(_)));
+        let err = check_string_id(foreign, &pool_b).unwrap_err();
+        assert!(matches!(err, Error::UnresolvedStringId(_)));
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -422,7 +422,7 @@ mod tests {
     impl EnumPropertyRegistry for TestRegistry {
         fn variant_count(&self) -> usize {
             match self {
-                // Hardcoded: check_enum_ref only needs EnumPropertyRegistry, not a full Schema,
+                // Hardcoded: check_enum_id only needs EnumPropertyRegistry, not a full Schema,
                 // so there's no second "domain enum" type to delegate to here (unlike what
                 // #[derive(EnumPropertyRegistry)] generates in production).
                 Self::Status => 2,
@@ -431,22 +431,22 @@ mod tests {
     }
 
     #[test]
-    fn enum_ref_within_variant_range_is_accepted() {
-        let valid = EnumRef::new(0, 1);
-        assert!(check_enum_ref::<TestRegistry>(valid).is_ok());
+    fn enum_id_within_variant_range_is_accepted() {
+        let valid = RawEnumId::new(0, 1);
+        assert!(check_enum_id::<TestRegistry>(valid).is_ok());
     }
 
     #[test]
-    fn enum_ref_variant_out_of_range_is_rejected() {
-        let out_of_range = EnumRef::new(0, 2);
-        let err = check_enum_ref::<TestRegistry>(out_of_range).unwrap_err();
+    fn enum_id_variant_out_of_range_is_rejected() {
+        let out_of_range = RawEnumId::new(0, 2);
+        let err = check_enum_id::<TestRegistry>(out_of_range).unwrap_err();
         assert!(matches!(err, Error::UnresolvedEnumVariant { .. }));
     }
 
     #[test]
-    fn enum_ref_unregistered_index_is_rejected() {
-        let unregistered = EnumRef::new(1, 0);
-        let err = check_enum_ref::<TestRegistry>(unregistered).unwrap_err();
+    fn enum_id_unregistered_index_is_rejected() {
+        let unregistered = RawEnumId::new(1, 0);
+        let err = check_enum_id::<TestRegistry>(unregistered).unwrap_err();
         assert!(matches!(err, Error::UnresolvedEnumKind(_)));
     }
 }

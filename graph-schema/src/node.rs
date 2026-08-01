@@ -14,9 +14,9 @@ pub trait StoredNode<S: Schema> {
     fn kind(&self) -> NodeKind<S>;
     fn seq(&self) -> usize;
 
-    /// Returns an untyped, schema-erased reference to this node, suitable for
+    /// Returns an untyped, schema-erased id for this node, suitable for
     /// passing to `Graph` lookup methods such as `get_node_property`.
-    fn node_ref(&self) -> RawNodeId {
+    fn node_id(&self) -> RawNodeId {
         RawNodeId::new(self.kind().index(), self.seq())
     }
 

@@ -122,7 +122,7 @@ pub(crate) fn property_binding(
         },
         TYP_STRING => PropertyBinding {
             elem_ty: quote!(&str),
-            pattern: quote!(flatpg::storage::StoredProperty::StringRef(v)),
+            pattern: quote!(flatpg::storage::StoredProperty::StringId(v)),
             expr: quote!(self.graph().resolve_string(v)),
             prop_type_path: quote!(flatpg::property::PropertyType::String),
         },
@@ -232,7 +232,7 @@ fn build_property_trait(
             #where_clause
             {
                 self.graph()
-                    .get_node_property(self.node_ref(), #enum_ident::#variant)?
+                    .get_node_property(self.node_id(), #enum_ident::#variant)?
                     .map(|p| match p {
                         #pattern => #expr,
                         other => Err(flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ())),
@@ -246,7 +246,7 @@ fn build_property_trait(
             #where_clause
             {
                 self.graph()
-                    .get_node_property(self.node_ref(), #enum_ident::#variant)
+                    .get_node_property(self.node_id(), #enum_ident::#variant)
                     .and_then(|mut p| match p.next() {
                         Some(#pattern) => #expr,
                         Some(other) => Err(flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ())),
@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn node_ref_typed_property_returns_node() {
+    fn node_id_typed_property_returns_node() {
         let input = parse_enum(r#"enum P { #[property(typ = NodeId, quantity = One)] Owner }"#);
         let file = parse_output(property_traits_derive(&input));
         let t = find_trait(&file, "Owner").unwrap();
