@@ -21,7 +21,7 @@ impl fmt::Display for StringRef {
 /// `lookup` both hold clones of that same `Rc`, so the dedup cache never
 /// duplicates the string's bytes. .
 #[derive(Debug, Default)]
-pub(crate) struct StringsPool {
+pub struct StringsPool {
     entries: Vec<Arc<str>>,
     lookup: HashMap<Arc<str>, StringRef>,
 }

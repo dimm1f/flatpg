@@ -514,7 +514,7 @@ impl StorageArray {
     }
 
     pub(crate) fn new_offsets() -> Self {
-        Self::Offset(Vec::new())
+        Self::Offset(vec![Offset::zero()])
     }
 }
 

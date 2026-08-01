@@ -205,6 +205,20 @@ let graph = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
 
 `Graph<S>` implements it directly, which is why `graph.alpha()` and `graph.edges(...)` work out of the box on a bare `Graph`. Implementing `GraphView` on a custom wrapper type gets the exact same generated accessors for free.
 
+#### `RawGraph`
+
+`RawGraph<S>` is `Graph<S>`'s flat storage with the wrapper stripped off — the same four fields (`node_meta_storage`, `edge_storage`, `property_storage`, `strings`), all `pub`. Reach for it instead of `GraphDiff` when you need direct mutable access to the columnar arrays: bulk loading, deserialization, or other custom batch construction where going through `GraphDiff::apply`'s per-node/per-edge API would be too slow or the wrong shape for your source data.
+
+```rust
+let raw: RawGraph<SimpleSchema> = graph.into();
+// ... mutate raw.node_meta_storage / raw.edge_storage / raw.property_storage / raw.strings directly ...
+let graph: Graph<SimpleSchema> = raw.try_into().expect("still a well-formed graph");
+```
+
+`Graph<S> -> RawGraph<S>` (via `From`) is infallible. The reverse (`RawGraph<S> -> Graph<S>`, via `TryFrom`) runs a full integrity check first — offset arrays well-formed and in bounds, storage slot types matching the schema, node/string/enum refs resolvable, and edge halves correctly paired — and returns `Err` on the first violation found. That check is also exposed directly through the `CheckIntegrity<S>` trait, implemented for both `RawGraph<S>` and `Graph<S>`, so it can be called without a conversion (useful in tests or for asserting an already-built graph is still well-formed).
+
+Known limitation: enum property validation confirms an `EnumRef` belongs to *some* registered enum with an in-range variant, not that it belongs to the *specific* enum a given property or edge slot declares. Half-edge pairing validates that mirrored halves exist in matching numbers, not that their property values agree with each other.
+
 ### Identifiers and references
 
 #### `NodeId` / `EdgeId`
@@ -282,7 +296,7 @@ Variants cover cases like an invalid property type, an unresolved node/edge/enum
 
 ### Low-level storage
 
-`storage::StorageArray`, along with the `EdgeStorage<S>`, `PropertyStorage<S>`, and `NodeMetaStorage<S>` wrappers around it, are the columnar arrays `Graph<S>` is actually built from — one array per storage slot, indexed by the offsets `Schema` computes. They're public for introspection, but normal usage goes entirely through `Graph`/`GraphDiff` rather than these directly.
+`storage::StorageArray`, along with the `EdgeStorage<S>`, `PropertyStorage<S>`, and `NodeMetaStorage<S>` wrappers around it, are the columnar arrays `Graph<S>` is actually built from — one array per storage slot, indexed by the offsets `Schema` computes. They're public for introspection, but normal usage goes entirely through `Graph`/`GraphDiff` rather than these directly. [`RawGraph`](#rawgraph) is the sanctioned way to get mutable access to them when you do need it.
 
 ## Workspace
 

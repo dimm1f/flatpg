@@ -81,4 +81,8 @@ impl FromStr for NoEnumProps {
 
 impl ItemFromStr for NoEnumProps {}
 
-impl EnumPropertyRegistry for NoEnumProps {}
+impl EnumPropertyRegistry for NoEnumProps {
+    fn variant_count(&self) -> usize {
+        match *self {}
+    }
+}

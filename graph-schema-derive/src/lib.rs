@@ -145,7 +145,6 @@ pub fn enum_property_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(EnumPropertyRegistry, attributes(enum_type))]
 pub fn enum_property_registry_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemEnum);
-    let ident = &input.ident;
 
     let enum_item_all = enum_derives::enum_item_all_derive(&input);
     let enum_item_from_index = enum_derives::enum_item_from_index_derive(&input);
@@ -162,8 +161,6 @@ pub fn enum_property_registry_derive(input: TokenStream) -> TokenStream {
         #enum_item_as_str
         #enum_item_from_str
         #enum_property_registry_impls
-
-        impl EnumPropertyRegistry for #ident {}
     }
     .into()
 }

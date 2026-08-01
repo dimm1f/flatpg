@@ -72,6 +72,34 @@ pub enum Error {
         "enum property index mismatch: value belongs to a different registered enum than \"{expected}\" (found enum index {found})"
     )]
     EnumPropIndexMismatch { expected: String, found: usize },
+    #[error("storage size mismatch for \"{storage}\": expected {expected} slots, found {found}")]
+    StorageSizeMismatch {
+        storage: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error(
+        "offsets length mismatch for slot \"{slot}\": expected {expected} (node count + 1), found {found}"
+    )]
+    OffsetsLengthMismatch {
+        slot: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error("offsets bounds mismatch for slot \"{slot}\": expected {expected}, found {found}")]
+    OffsetsBoundsMismatch {
+        slot: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error("node \"{node}\" seq {seq} is out of bounds (node count: {count})")]
+    NodeSeqOutOfBounds {
+        node: String,
+        seq: usize,
+        count: usize,
+    },
+    #[error("failed to resolve enum kind {0}")]
+    UnresolvedEnumKind(usize),
 }
 
 impl Error {
@@ -189,5 +217,45 @@ impl Error {
             expected: expected.into(),
             found,
         }
+    }
+
+    pub fn storage_size_mismatch(
+        storage: impl Into<String>,
+        expected: usize,
+        found: usize,
+    ) -> Self {
+        Self::StorageSizeMismatch {
+            storage: storage.into(),
+            expected,
+            found,
+        }
+    }
+
+    pub fn offsets_length_mismatch(slot: impl Into<String>, expected: usize, found: usize) -> Self {
+        Self::OffsetsLengthMismatch {
+            slot: slot.into(),
+            expected,
+            found,
+        }
+    }
+
+    pub fn offsets_bounds_mismatch(slot: impl Into<String>, expected: usize, found: usize) -> Self {
+        Self::OffsetsBoundsMismatch {
+            slot: slot.into(),
+            expected,
+            found,
+        }
+    }
+
+    pub fn node_seq_out_of_bounds(node: impl Into<String>, seq: usize, count: usize) -> Self {
+        Self::NodeSeqOutOfBounds {
+            node: node.into(),
+            seq,
+            count,
+        }
+    }
+
+    pub fn unresolved_enum_kind(kind_index: usize) -> Self {
+        Self::UnresolvedEnumKind(kind_index)
     }
 }

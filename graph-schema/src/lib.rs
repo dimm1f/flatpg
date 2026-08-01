@@ -118,6 +118,7 @@ pub trait EnumPropertyIndex:
 pub trait EnumPropertyRegistry:
     ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Eq + Hash + 'static
 {
+    fn variant_count(&self) -> usize;
 }
 
 pub trait EnumProperty:

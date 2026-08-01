@@ -2,6 +2,7 @@ use crate::{
     EdgeDirectionKind, ItemIndex,
     edge::{Direction, EdgeHandle, EdgeId},
     error::Error,
+    graph::integrity::{CheckIntegrity, check_integrity},
     node::{NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, EdgeStorageSlot, NodeKind, PropKind, Schema},
@@ -12,6 +13,8 @@ use crate::{
 };
 
 pub mod builder;
+pub mod integrity;
+pub mod raw;
 
 pub struct Graph<S> {
     node_meta_storage: NodeMetaStorage<S>,
@@ -226,6 +229,17 @@ impl<S: Schema> Graph<S> {
 impl<S: Schema> Default for Graph<S> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<S: Schema> CheckIntegrity<S> for Graph<S> {
+    fn check_integrity(&self) -> Result<(), Error> {
+        check_integrity(
+            &self.node_meta_storage,
+            &self.edge_storage,
+            &self.property_storage,
+            &self.strings,
+        )
     }
 }
 

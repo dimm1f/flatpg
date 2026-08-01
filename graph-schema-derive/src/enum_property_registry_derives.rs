@@ -35,6 +35,17 @@ pub fn enum_property_registry_derive(input: &ItemEnum) -> TokenStream {
         Err(e) => return e.to_compile_error(),
     };
 
+    let ident = &input.ident;
+    let variant_idents: Vec<&Ident> = input.variants.iter().map(|v| &v.ident).collect();
+
+    let variant_count_arms =
+        variant_idents
+            .iter()
+            .zip(enum_types.iter())
+            .map(|(variant_ident, enum_ty)| {
+                quote! { Self::#variant_ident => <#enum_ty as ItemAll>::all().len(), }
+            });
+
     let impls = enum_types.iter().enumerate().map(|(i, enum_ty)| {
         let enum_name = quote!(#enum_ty).to_string();
         quote! {
@@ -70,7 +81,18 @@ pub fn enum_property_registry_derive(input: &ItemEnum) -> TokenStream {
         }
     });
 
-    quote! { #(#impls)* }
+    quote! {
+        #(#impls)*
+
+        #[automatically_derived]
+        impl EnumPropertyRegistry for #ident {
+            fn variant_count(&self) -> usize {
+                match *self {
+                    #(#variant_count_arms)*
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

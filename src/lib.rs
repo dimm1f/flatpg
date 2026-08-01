@@ -20,6 +20,9 @@ pub mod prelude {
     };
 
     pub use graph_schema::graph::GraphView;
+    pub use graph_schema::graph::integrity::CheckIntegrity;
 }
 
-pub use graph_schema::{edge, enum_property, error, graph, node, property, schema, storage};
+pub use graph_schema::{
+    edge, enum_property, error, graph, node, property, schema, storage, strings_pool,
+};
