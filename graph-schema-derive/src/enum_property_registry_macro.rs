@@ -151,6 +151,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_restricted_pub_crate_visibility() {
+        let def = parse_registry_def("pub(crate) Registry: Status");
+        assert!(matches!(def.vis, Visibility::Restricted(_)));
+    }
+
+    #[test]
+    fn expand_preserves_restricted_visibility() {
+        let def = parse_registry_def("pub(crate) Registry: Status");
+        let file = parse_output(expand(def));
+        let item = find_enum(&file);
+        assert!(matches!(item.vis, Visibility::Restricted(_)));
+    }
+
+    #[test]
     fn missing_colon_is_a_parse_error() {
         assert!(syn::parse_str::<RegistryDef>("Registry Status").is_err());
     }

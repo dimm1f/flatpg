@@ -127,6 +127,15 @@ pub(crate) mod test_support {
         })
     }
 
+    pub(crate) fn assert_inherited_vis(method: &ImplItemFn) {
+        assert!(
+            matches!(method.vis, syn::Visibility::Inherited),
+            "trait impl method `{}` must not have an explicit visibility qualifier, found {:?}",
+            method.sig.ident,
+            quote::quote!(#method).to_string()
+        );
+    }
+
     pub(crate) fn match_arm_count(method: &ImplItemFn) -> Option<usize> {
         method.block.stmts.iter().find_map(|stmt| match stmt {
             Stmt::Expr(Expr::Match(m), _) => Some(m.arms.len()),

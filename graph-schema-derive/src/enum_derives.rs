@@ -59,7 +59,6 @@ pub(crate) fn require_type_param(
 
 pub fn enum_item_all_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
-    let vis = &input.vis;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
     let variants = input
         .variants
@@ -75,7 +74,7 @@ pub fn enum_item_all_derive(input: &ItemEnum) -> TokenStream {
         const #items_array_name: [#ident; #variants_count] = [#(#variants,)*];
         #[automatically_derived]
         impl #impl_generics ItemAll for #ident #ty_generics #where_clause {
-            #vis fn all() -> &'static [#ident] {
+            fn all() -> &'static [#ident] {
                 &#items_array_name
             }
         }
@@ -84,7 +83,6 @@ pub fn enum_item_all_derive(input: &ItemEnum) -> TokenStream {
 
 pub fn enum_item_from_index_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
-    let vis = &input.vis;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
     let variants = input
         .variants
@@ -97,7 +95,7 @@ pub fn enum_item_from_index_derive(input: &ItemEnum) -> TokenStream {
     quote! {
         #[automatically_derived]
         impl #impl_generics ItemFromIndex for #ident #ty_generics #where_clause {
-            #vis fn from_index(index: usize) -> Option<Self> {
+            fn from_index(index: usize) -> Option<Self> {
                 match index {
                     #(
                         #variants,
@@ -111,7 +109,6 @@ pub fn enum_item_from_index_derive(input: &ItemEnum) -> TokenStream {
 
 pub fn enum_item_index_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
-    let vis = &input.vis;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
     let variants = input
         .variants
@@ -124,7 +121,7 @@ pub fn enum_item_index_derive(input: &ItemEnum) -> TokenStream {
     quote! {
         #[automatically_derived]
         impl #impl_generics ItemIndex for #ident #ty_generics #where_clause {
-            #vis fn index(&self) -> usize {
+            fn index(&self) -> usize {
                 match self {
                     #(#variants,)*
                 }
@@ -135,7 +132,6 @@ pub fn enum_item_index_derive(input: &ItemEnum) -> TokenStream {
 
 pub fn enum_item_as_str_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
-    let vis = &input.vis;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
     let variants = input
         .variants
@@ -151,7 +147,7 @@ pub fn enum_item_as_str_derive(input: &ItemEnum) -> TokenStream {
     quote! {
         #[automatically_derived]
         impl #impl_generics ItemAsStr for #ident #ty_generics #where_clause {
-            #vis fn as_str(&self) -> &'static str {
+            fn as_str(&self) -> &'static str {
                 match self {
                     #(
                         #orig_variants,
@@ -164,7 +160,6 @@ pub fn enum_item_as_str_derive(input: &ItemEnum) -> TokenStream {
 
 pub fn enum_item_from_str_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
-    let vis = &input.vis;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
     let variants = input
         .variants
@@ -181,7 +176,7 @@ pub fn enum_item_from_str_derive(input: &ItemEnum) -> TokenStream {
         #[automatically_derived]
         impl #impl_generics std::str::FromStr for #ident #ty_generics #where_clause {
             type Err = flatpg::error::Error;
-            #vis fn from_str(s: &str) -> Result<Self, Self::Err> {
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
                 match s {
                     #(
                         #orig_variants,
@@ -190,7 +185,7 @@ pub fn enum_item_from_str_derive(input: &ItemEnum) -> TokenStream {
                 }
             }
         }
-        impl ItemFromStr for #ident {}
+        impl #impl_generics ItemFromStr for #ident #ty_generics #where_clause {}
     }
 }
 
@@ -254,7 +249,6 @@ pub(crate) fn parse_property_attr(
 
 pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenStream {
     let ident = &input.ident;
-    let vis = &input.vis;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
 
     let variant_attrs = input
@@ -318,12 +312,12 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
         impl #impl_generics ItemKindPropertyType for #ident #ty_generics #where_clause {
             type PropertyType = flatpg::property::PropertyType;
             type QuantityType = flatpg::property::QuantityType;
-            #vis fn property_type(&self) -> Self::PropertyType {
+            fn property_type(&self) -> Self::PropertyType {
                 match self {
                     #(#prop_type_variants,)*
                 }
             }
-            #vis fn property_quantity(&self) -> Self::QuantityType {
+            fn property_quantity(&self) -> Self::QuantityType {
                 match self {
                     #(#prop_qty_variants,)*
                 }
@@ -336,7 +330,8 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
 mod tests {
     use super::*;
     use crate::common::test_support::{
-        find_impl, find_method, has_compile_error, match_arm_count, parse_enum, parse_output,
+        assert_inherited_vis, find_impl, find_method, has_compile_error, match_arm_count,
+        parse_enum, parse_output,
     };
     use syn::{Expr, File, ImplItem, Item, Stmt, parse_str, punctuated::Punctuated};
 
@@ -489,7 +484,19 @@ mod tests {
 
         let impl_block =
             find_impl(&file, "ItemAll", "Color").expect("impl ItemAll for Color not found");
-        assert!(find_method(impl_block, "all").is_some());
+        let method = find_method(impl_block, "all").expect("fn all not found");
+        assert_inherited_vis(method);
+    }
+
+    #[test]
+    fn enum_item_all_derive_pub_enum_method_has_no_explicit_vis() {
+        let input = parse_enum("pub enum Color { Red, Green, Blue }");
+        let file = parse_output(enum_item_all_derive(&input));
+
+        let impl_block =
+            find_impl(&file, "ItemAll", "Color").expect("impl ItemAll for Color not found");
+        let method = find_method(impl_block, "all").expect("fn all not found");
+        assert_inherited_vis(method);
     }
 
     #[test]
@@ -520,6 +527,17 @@ mod tests {
             find_impl(&file, "ItemFromIndex", "Dir").expect("impl ItemFromIndex for Dir not found");
         let method = find_method(impl_block, "from_index").expect("fn from_index not found");
         assert_eq!(match_arm_count(method).expect("no match expr"), 3); // 2 variants + wildcard
+        assert_inherited_vis(method);
+    }
+
+    #[test]
+    fn enum_item_from_index_derive_pub_enum_method_has_no_explicit_vis() {
+        let input = parse_enum("pub enum Dir { In, Out }");
+        let file = parse_output(enum_item_from_index_derive(&input));
+        let impl_block =
+            find_impl(&file, "ItemFromIndex", "Dir").expect("impl ItemFromIndex for Dir not found");
+        let method = find_method(impl_block, "from_index").expect("fn from_index not found");
+        assert_inherited_vis(method);
     }
 
     #[test]
@@ -530,6 +548,17 @@ mod tests {
             find_impl(&file, "ItemIndex", "Dir").expect("impl ItemIndex for Dir not found");
         let method = find_method(impl_block, "index").expect("fn index not found");
         assert_eq!(match_arm_count(method).expect("no match expr"), 2); // 2 variants, no wildcard
+        assert_inherited_vis(method);
+    }
+
+    #[test]
+    fn enum_item_index_derive_pub_enum_method_has_no_explicit_vis() {
+        let input = parse_enum("pub enum Dir { In, Out }");
+        let file = parse_output(enum_item_index_derive(&input));
+        let impl_block =
+            find_impl(&file, "ItemIndex", "Dir").expect("impl ItemIndex for Dir not found");
+        let method = find_method(impl_block, "index").expect("fn index not found");
+        assert_inherited_vis(method);
     }
 
     #[test]
@@ -540,11 +569,22 @@ mod tests {
             find_impl(&file, "ItemAsStr", "Color").expect("impl ItemAsStr for Color not found");
         let method = find_method(impl_block, "as_str").expect("fn as_str not found");
         assert_eq!(match_arm_count(method).expect("no match expr"), 2);
+        assert_inherited_vis(method);
 
         let syn::ReturnType::Type(_, ret_ty) = &method.sig.output else {
             panic!("expected return type")
         };
         assert!(matches!(ret_ty.as_ref(), syn::Type::Reference(_)));
+    }
+
+    #[test]
+    fn enum_item_as_str_derive_pub_enum_method_has_no_explicit_vis() {
+        let input = parse_enum("pub enum Color { Red, Green }");
+        let file = parse_output(enum_item_as_str_derive(&input));
+        let impl_block =
+            find_impl(&file, "ItemAsStr", "Color").expect("impl ItemAsStr for Color not found");
+        let method = find_method(impl_block, "as_str").expect("fn as_str not found");
+        assert_inherited_vis(method);
     }
 
     #[test]
@@ -560,8 +600,38 @@ mod tests {
         );
         let method = find_method(impl_block, "from_str").expect("fn from_str not found");
         assert_eq!(match_arm_count(method).expect("no match expr"), 3); // 2 variants + wildcard
+        assert_inherited_vis(method);
 
         assert!(find_impl(&file, "ItemFromStr", "Color").is_some());
+    }
+
+    #[test]
+    fn enum_item_from_str_derive_forwards_generics_to_item_from_str_impl() {
+        let input = parse_enum("enum Color<const N: usize> { Red, Green }");
+        let file = parse_output(enum_item_from_str_derive(&input));
+
+        let from_str_impl =
+            find_impl(&file, "FromStr", "Color").expect("impl FromStr for Color not found");
+        let item_from_str_impl =
+            find_impl(&file, "ItemFromStr", "Color").expect("impl ItemFromStr for Color not found");
+
+        assert_eq!(from_str_impl.generics.params.len(), 1);
+        assert_eq!(
+            item_from_str_impl.generics.params.len(),
+            from_str_impl.generics.params.len(),
+            "ItemFromStr impl must forward the same generics as the FromStr impl"
+        );
+    }
+
+    #[test]
+    fn enum_item_from_str_derive_pub_enum_method_has_no_explicit_vis() {
+        let input = parse_enum("pub enum Color { Red, Green }");
+        let file = parse_output(enum_item_from_str_derive(&input));
+
+        let impl_block =
+            find_impl(&file, "FromStr", "Color").expect("impl FromStr for Color not found");
+        let method = find_method(impl_block, "from_str").expect("fn from_str not found");
+        assert_inherited_vis(method);
     }
 
     #[test]
@@ -582,10 +652,12 @@ mod tests {
         let prop_method =
             find_method(impl_block, "property_type").expect("fn property_type not found");
         assert_eq!(match_arm_count(prop_method).expect("no match expr"), 2);
+        assert_inherited_vis(prop_method);
 
         let qty_method =
             find_method(impl_block, "property_quantity").expect("fn property_quantity not found");
         assert_eq!(match_arm_count(qty_method).expect("no match expr"), 2);
+        assert_inherited_vis(qty_method);
 
         let Stmt::Expr(Expr::Match(m), _) = &qty_method.block.stmts[0] else {
             panic!("expected match")
@@ -596,6 +668,22 @@ mod tests {
             };
             assert_eq!(p.path.segments.last().unwrap().ident, "One");
         }
+    }
+
+    #[test]
+    fn property_type_derive_pub_enum_methods_have_no_explicit_vis() {
+        let input =
+            parse_enum(r#"pub enum E { #[property(typ = Int)] A, #[property(typ = Bool)] B }"#);
+        let file = parse_output(item_kind_property_type_derive(&input, false));
+        let impl_block = find_impl(&file, "ItemKindPropertyType", "E").expect("impl not found");
+
+        let prop_method =
+            find_method(impl_block, "property_type").expect("fn property_type not found");
+        assert_inherited_vis(prop_method);
+
+        let qty_method =
+            find_method(impl_block, "property_quantity").expect("fn property_quantity not found");
+        assert_inherited_vis(qty_method);
     }
 
     #[test]

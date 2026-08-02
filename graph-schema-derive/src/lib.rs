@@ -88,6 +88,7 @@ pub fn node_kind_derive(input: TokenStream) -> TokenStream {
 pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemEnum);
     let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
 
     let config = match edge_structs_derives::parse_edge_kind_config(&input) {
         Ok(c) => c,
@@ -114,7 +115,7 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
         #edge_structs
         #edges_accessor
 
-        impl EdgeItemKind for #name {}
+        impl #impl_generics EdgeItemKind for #name #ty_generics #where_clause {}
     }
     .into()
 }
@@ -123,6 +124,7 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
 pub fn enum_property_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemEnum);
     let ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
 
     let enum_item_all = enum_derives::enum_item_all_derive(&input);
     let enum_item_from_index = enum_derives::enum_item_from_index_derive(&input);
@@ -137,7 +139,7 @@ pub fn enum_property_derive(input: TokenStream) -> TokenStream {
         #enum_item_as_str
         #enum_item_from_str
 
-        impl EnumProperty for #ident {}
+        impl #impl_generics EnumProperty for #ident #ty_generics #where_clause {}
     }
     .into()
 }
@@ -181,6 +183,7 @@ pub fn schema(input: TokenStream) -> TokenStream {
 pub fn property_kind_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemEnum);
     let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
 
     let enum_item_all = enum_derives::enum_item_all_derive(&input);
     let enum_item_from_index = enum_derives::enum_item_from_index_derive(&input);
@@ -199,7 +202,7 @@ pub fn property_kind_derive(input: TokenStream) -> TokenStream {
         #enum_item_property_type
         #property_traits
 
-        impl PropertyItemKind for #name {}
+        impl #impl_generics PropertyItemKind for #name #ty_generics #where_clause {}
     }
     .into()
 }

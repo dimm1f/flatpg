@@ -30,6 +30,7 @@ fn edge_struct_name(name: &Ident) -> Ident {
 fn build_edge_property_method(
     attrs: &PropertyItemAttrs,
     schema_ty: &TypePath,
+    vis: &syn::Visibility,
 ) -> Result<TokenStream, Error> {
     let variant = &attrs.variant;
     let typ = attrs
@@ -56,7 +57,7 @@ fn build_edge_property_method(
     };
 
     Ok(quote! {
-        pub fn property(#self_param) -> Result<Option<#elem_ty>, flatpg::error::Error> {
+        #vis fn property(#self_param) -> Result<Option<#elem_ty>, flatpg::error::Error> {
             self.graph()
                 .get_edge_property(self.edge())?
                 .map(|p| match p {
@@ -70,6 +71,7 @@ fn build_edge_property_method(
 
 fn expand_edge_structs(
     name: &Ident,
+    vis: &syn::Visibility,
     vars: &[(&Ident, Ident, PropertyItemAttrs)],
     config: &EdgeKindConfig,
 ) -> Result<TokenStream, Error> {
@@ -77,9 +79,9 @@ fn expand_edge_structs(
     let structs = vars
         .iter()
         .map(|(v, struct_name, attrs)| {
-            let property_method = build_edge_property_method(attrs, schema_ty)?;
+            let property_method = build_edge_property_method(attrs, schema_ty, vis)?;
             Ok(quote! {
-                pub struct #struct_name<'a> {
+                #vis struct #struct_name<'a> {
                     graph: &'a flatpg::graph::Graph<#schema_ty>,
                     src_node: flatpg::node::NodeId<#schema_ty>,
                     dst_node: flatpg::node::NodeId<#schema_ty>,
@@ -88,7 +90,7 @@ fn expand_edge_structs(
                 }
 
                 impl<'a> #struct_name<'a> {
-                    pub fn new(
+                    #vis fn new(
                         graph: &'a flatpg::graph::Graph<#schema_ty>,
                         src_node: flatpg::node::NodeId<#schema_ty>,
                         dst_node: flatpg::node::NodeId<#schema_ty>,
@@ -148,6 +150,7 @@ pub fn edge_structs_derive(
     config: &EdgeKindConfig,
 ) -> Result<TokenStream, Error> {
     let ident = &input.ident;
+    let vis = &input.vis;
     let schema_ty = &config.schema;
 
     let variants = input
@@ -167,7 +170,7 @@ pub fn edge_structs_derive(
         )
         .collect::<Result<Vec<_>, Error>>()?;
 
-    let structs = expand_edge_structs(ident, &variants, config)?;
+    let structs = expand_edge_structs(ident, vis, &variants, config)?;
 
     let edge_variants = variants.iter().map(|(v, struct_name, _)| {
         quote! {
@@ -193,14 +196,14 @@ pub fn edge_structs_derive(
     Ok(quote! {
         #structs
 
-        pub enum Edge<'a> {
+        #vis enum Edge<'a> {
             #(
                 #edge_variants,
             )*
         }
 
         impl<'a> Edge<'a> {
-            pub fn new(
+            #vis fn new(
                 graph: &'a flatpg::graph::Graph<#schema_ty>,
                 kind: #ident,
                 src_node: flatpg::node::NodeId<#schema_ty>,
@@ -311,6 +314,77 @@ mod tests {
             "#[edge_kind(schema = {schema})] enum E {{ A, B }}"
         )))
         .expect("valid config")
+    }
+
+    fn assert_vis_matches(actual: &syn::Visibility, expect_pub: bool, what: &str) {
+        let is_pub = matches!(actual, syn::Visibility::Public(_));
+        assert_eq!(
+            is_pub,
+            expect_pub,
+            "expected `{what}` to be {} (matching the source enum's visibility) but it was {}",
+            if expect_pub { "pub" } else { "non-pub" },
+            if is_pub { "pub" } else { "non-pub" }
+        );
+    }
+
+    fn check_edge_structs_visibility(enum_src: &str, expect_pub: bool) {
+        let input = parse_enum(enum_src);
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+
+        let edge_struct = find_struct(&file, "AEdge").expect("AEdge struct not found");
+        assert_vis_matches(&edge_struct.vis, expect_pub, "struct AEdge");
+
+        let inherent =
+            find_inherent_impl(&file, "AEdge").expect("inherent impl for AEdge not found");
+        let new_method = find_method(inherent, "new").expect("AEdge::new not found");
+        assert_vis_matches(&new_method.vis, expect_pub, "fn AEdge::new");
+
+        let edge_enum = find_enum(&file, "Edge").expect("Edge enum not found");
+        assert_vis_matches(&edge_enum.vis, expect_pub, "enum Edge");
+
+        let edge_impl =
+            find_inherent_impl(&file, "Edge").expect("inherent impl for Edge not found");
+        let edge_new = find_method(edge_impl, "new").expect("Edge::new not found");
+        assert_vis_matches(&edge_new.vis, expect_pub, "fn Edge::new");
+    }
+
+    #[test]
+    fn edge_structs_derive_pub_enum_generates_pub_items() {
+        check_edge_structs_visibility(
+            r#"pub enum E { #[property(typ = None)] A, #[property(typ = None)] B }"#,
+            true,
+        );
+    }
+
+    #[test]
+    fn edge_structs_derive_private_enum_does_not_leak_pub_items() {
+        check_edge_structs_visibility(
+            r#"enum E { #[property(typ = None)] A, #[property(typ = None)] B }"#,
+            false,
+        );
+    }
+
+    #[test]
+    fn edge_structs_derive_pub_enum_property_method_is_pub() {
+        let input = parse_enum(r#"pub enum E { #[property(typ = String)] Labeled }"#);
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+        let inherent = find_inherent_impl(&file, "LabeledEdge")
+            .expect("inherent impl for LabeledEdge not found");
+        let method = find_method(inherent, "property").expect("property method not found");
+        assert_vis_matches(&method.vis, true, "fn LabeledEdge::property");
+    }
+
+    #[test]
+    fn edge_structs_derive_private_enum_property_method_is_not_pub() {
+        let input = parse_enum(r#"enum E { #[property(typ = String)] Labeled }"#);
+        let config = edge_kind_config("MySchema");
+        let file = parse_output(edge_structs_derive(&input, &config).unwrap());
+        let inherent = find_inherent_impl(&file, "LabeledEdge")
+            .expect("inherent impl for LabeledEdge not found");
+        let method = find_method(inherent, "property").expect("property method not found");
+        assert_vis_matches(&method.vis, false, "fn LabeledEdge::property");
     }
 
     #[test]

@@ -135,6 +135,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_restricted_pub_crate_visibility() {
+        let def = parse_schema_def("pub(crate) SimpleSchema: A, B, C");
+        assert!(matches!(def.vis, Visibility::Restricted(_)));
+    }
+
+    #[test]
+    fn expand_preserves_restricted_visibility_on_struct() {
+        let def = parse_schema_def("pub(crate) SimpleSchema: A, B, C");
+        let file = parse_output(expand(def));
+        let item = find_struct(&file, "SimpleSchema");
+        assert!(matches!(item.vis, Visibility::Restricted(_)));
+    }
+
+    #[test]
     fn missing_colon_is_a_parse_error() {
         assert!(syn::parse_str::<SchemaDef>("SimpleSchema A, B, C").is_err());
     }

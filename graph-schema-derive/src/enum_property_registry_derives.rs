@@ -36,6 +36,7 @@ pub fn enum_property_registry_derive(input: &ItemEnum) -> TokenStream {
     };
 
     let ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
     let variant_idents: Vec<&Ident> = input.variants.iter().map(|v| &v.ident).collect();
 
     let variant_count_arms =
@@ -85,7 +86,7 @@ pub fn enum_property_registry_derive(input: &ItemEnum) -> TokenStream {
         #(#impls)*
 
         #[automatically_derived]
-        impl EnumPropertyRegistry for #ident {
+        impl #impl_generics EnumPropertyRegistry for #ident #ty_generics #where_clause {
             fn variant_count(&self) -> usize {
                 match *self {
                     #(#variant_count_arms)*
@@ -144,5 +145,16 @@ mod tests {
     fn missing_enum_type_attribute_emits_compile_error() {
         let input = parse_enum("enum PropEnumsRegistry { Status }");
         assert!(has_compile_error(enum_property_registry_derive(&input)));
+    }
+
+    #[test]
+    fn registry_impl_forwards_generics_from_input_enum() {
+        let input =
+            parse_enum(r#"enum PropEnumsRegistry<const N: usize> { #[enum_type(Status)] Status }"#);
+        let file = parse_output(enum_property_registry_derive(&input));
+
+        let impl_block = find_impl(&file, "EnumPropertyRegistry", "PropEnumsRegistry")
+            .expect("impl EnumPropertyRegistry for PropEnumsRegistry not found");
+        assert_eq!(impl_block.generics.params.len(), 1);
     }
 }
