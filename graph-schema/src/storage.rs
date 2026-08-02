@@ -48,13 +48,13 @@ impl StoredProperty {
 pub struct Offset(u32);
 
 impl Offset {
-    pub(crate) fn new(value: usize) -> Result<Self, Error> {
+    pub fn new(value: usize) -> Result<Self, Error> {
         u32::try_from(value)
             .map(Self)
             .map_err(|_| Error::offset_overflow(value))
     }
 
-    pub(crate) fn zero() -> Self {
+    pub fn zero() -> Self {
         Self(0)
     }
 
@@ -63,7 +63,7 @@ impl Offset {
     }
 
     /// `self - rhs`, as a plain length. Fails if `rhs > self` (offsets not non-decreasing).
-    pub(crate) fn checked_sub(self, rhs: Self) -> Result<usize, Error> {
+    pub fn checked_sub(self, rhs: Self) -> Result<usize, Error> {
         self.0
             .checked_sub(rhs.0)
             .map(|v| v as usize)
@@ -71,7 +71,7 @@ impl Offset {
     }
 
     /// `self + delta`. Fails if the result (or `delta` itself) doesn't fit in `u32`.
-    pub(crate) fn checked_add_delta(self, delta: usize) -> Result<Self, Error> {
+    pub fn checked_add_delta(self, delta: usize) -> Result<Self, Error> {
         let delta = u32::try_from(delta).map_err(|_| Error::offset_overflow(delta))?;
         self.0
             .checked_add(delta)
@@ -80,7 +80,7 @@ impl Offset {
     }
 
     /// `self - delta`. Fails if `delta > self` (offsets not non-decreasing).
-    pub(crate) fn checked_sub_delta(self, delta: usize) -> Result<Self, Error> {
+    pub fn checked_sub_delta(self, delta: usize) -> Result<Self, Error> {
         let delta = u32::try_from(delta).map_err(|_| Error::offset_underflow())?;
         self.0
             .checked_sub(delta)
@@ -585,7 +585,7 @@ impl StorageArray {
         Error::invalid_property_type(target, self.typ())
     }
 
-    pub(crate) fn new_offsets() -> Self {
+    pub fn new_offsets() -> Self {
         Self::Offset(vec![Offset::zero()])
     }
 }
@@ -630,14 +630,14 @@ pub struct NodeMetaStorage<S> {
 }
 
 impl<S: Schema> NodeMetaStorage<S> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             storage: vec![Vec::default(); S::number_of_node_kinds()],
             _phantom: PhantomData,
         }
     }
 
-    pub(crate) fn append(&mut self, mut other: Self) {
+    pub fn append(&mut self, mut other: Self) {
         for kind in S::node_kinds() {
             // Safety: both vecs have number_of_node_kinds() slots; kind.index() is in-bounds; separate vecs cannot alias.
             let nodes = unsafe { self.storage.get_unchecked_mut(kind.index()) };
@@ -673,7 +673,7 @@ pub struct EdgeStorage<S> {
 }
 
 impl<S: Schema> EdgeStorage<S> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let mut storage = vec![StorageArray::default(); S::edge_storage_size()];
 
         for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
@@ -697,7 +697,7 @@ impl<S: Schema> EdgeStorage<S> {
         }
     }
 
-    pub(crate) fn append(&mut self, mut other: Self) -> Result<(), Error> {
+    pub fn append(&mut self, mut other: Self) -> Result<(), Error> {
         for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
             let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
 
@@ -775,7 +775,7 @@ pub struct PropertyStorage<S> {
 }
 
 impl<S: Schema> PropertyStorage<S> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let mut storage = vec![StorageArray::default(); S::property_storage_size()];
 
         for (node_kind, property_kind) in S::property_storage_slots_iter() {
@@ -794,7 +794,7 @@ impl<S: Schema> PropertyStorage<S> {
         }
     }
 
-    pub(crate) fn append(&mut self, mut other: Self) -> Result<(), Error> {
+    pub fn append(&mut self, mut other: Self) -> Result<(), Error> {
         for (node_kind, property_kind) in S::property_storage_slots_iter() {
             let slot = S::property_storage_slot(node_kind, property_kind);
 

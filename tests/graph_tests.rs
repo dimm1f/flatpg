@@ -51,6 +51,8 @@ enum TestProperty {
     LinkedNode,
     #[property(typ = Enum<Status>, quantity = Multi)]
     Tags,
+    #[property(typ = String, quantity = One, rename = Label)]
+    Tag,
 }
 
 #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
@@ -1443,6 +1445,13 @@ fn edge_with_node_id_property_round_trips() {
     let target = refers_to.property().unwrap().unwrap();
     assert_eq!(target.kind(), TestNode::Beta);
     assert_eq!(target.seq(), beta.seq());
+}
+
+#[test]
+fn property_rename_overrides_string_representation() {
+    assert_eq!(TestProperty::Tag.as_str(), "Label");
+    assert_eq!("Label".parse::<TestProperty>().unwrap(), TestProperty::Tag);
+    assert!("Tag".parse::<TestProperty>().is_err());
 }
 
 #[test]

@@ -26,6 +26,8 @@ enum SimpleProperty {
     Ref,
     #[property(typ = Enum<Status>, quantity = One)]
     State,
+    #[property(typ = String, quantity = One, rename = Label)]
+    Tag,
 }
 
 #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
@@ -153,6 +155,13 @@ fn main() {
         .expect("edge property lookup")
         .expect("Extended edges carry a property");
     assert_eq!(edge_property, "refers-to");
+
+    assert_eq!(SimpleProperty::Tag.as_str(), "Label");
+    assert_eq!(
+        "Label".parse::<SimpleProperty>().unwrap(),
+        SimpleProperty::Tag
+    );
+    assert!("Tag".parse::<SimpleProperty>().is_err());
 
     println!("simple_graph example OK");
 }

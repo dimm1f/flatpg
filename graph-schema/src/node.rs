@@ -71,7 +71,7 @@ pub struct RawNodeId {
 }
 
 impl RawNodeId {
-    pub(crate) fn new(kind: usize, seq: usize) -> Self {
+    pub fn new(kind: usize, seq: usize) -> Self {
         assert!(kind <= u32::MAX as usize);
         assert!(seq <= u32::MAX as usize);
         Self {

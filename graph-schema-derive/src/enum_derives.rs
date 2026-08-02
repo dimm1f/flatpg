@@ -8,11 +8,13 @@ use crate::common::typ_last_segment_name;
 pub(crate) const PROPERTY_ATTR: &str = "property";
 const PROPERTY_TYPE_KEY: &str = "typ";
 const PROPERTY_QTY_KEY: &str = "quantity";
+const PROPERTY_RENAME_KEY: &str = "rename";
 
 pub(crate) struct PropertyItemAttrs {
     pub(crate) variant: Ident,
     pub(crate) prop_typ: Option<TypePath>,
     pub(crate) prop_qty: Option<TypePath>,
+    pub(crate) rename: Option<TypePath>,
 }
 
 pub(crate) fn find_attribute<'a>(ident_str: &str, attrs: &'a [Attribute]) -> Option<&'a Attribute> {
@@ -133,16 +135,27 @@ pub fn enum_item_index_derive(input: &ItemEnum) -> TokenStream {
 pub fn enum_item_as_str_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
-    let variants = input
+
+    let labeled_variants = input
         .variants
         .iter()
-        .map(|Variant { ident: variant, .. }| variant)
-        .collect::<Vec<_>>();
+        .map(
+            |Variant {
+                 ident: variant,
+                 attrs,
+                 ..
+             }| variant_label(variant, attrs).map(|label| (variant, label)),
+        )
+        .collect::<Result<Vec<_>, _>>();
 
-    let orig_variants = variants.iter().map(|variant| {
-        let label = LitStr::new(&variant.to_string(), variant.span());
-        quote! {#ident::#variant => #label}
-    });
+    let labeled_variants = match labeled_variants {
+        Ok(v) => v,
+        Err(e) => return e.to_compile_error(),
+    };
+
+    let orig_variants = labeled_variants
+        .iter()
+        .map(|(variant, label)| quote! {#ident::#variant => #label});
 
     quote! {
         #[automatically_derived]
@@ -161,16 +174,27 @@ pub fn enum_item_as_str_derive(input: &ItemEnum) -> TokenStream {
 pub fn enum_item_from_str_derive(input: &ItemEnum) -> TokenStream {
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
-    let variants = input
+
+    let labeled_variants = input
         .variants
         .iter()
-        .map(|Variant { ident, .. }| ident)
-        .collect::<Vec<_>>();
+        .map(
+            |Variant {
+                 ident: variant,
+                 attrs,
+                 ..
+             }| variant_label(variant, attrs).map(|label| (variant, label)),
+        )
+        .collect::<Result<Vec<_>, _>>();
 
-    let orig_variants = variants.iter().map(|variant| {
-        let label = LitStr::new(&variant.to_string(), variant.span());
-        quote! {#label => Ok(#ident::#variant)}
-    });
+    let labeled_variants = match labeled_variants {
+        Ok(v) => v,
+        Err(e) => return e.to_compile_error(),
+    };
+
+    let orig_variants = labeled_variants
+        .iter()
+        .map(|(variant, label)| quote! {#label => Ok(#ident::#variant)});
 
     quote! {
         #[automatically_derived]
@@ -240,11 +264,30 @@ pub(crate) fn parse_property_attr(
         .find(|m| m.path.is_ident(PROPERTY_QTY_KEY))
         .map(|m| m.value.clone());
 
+    let rename = prefs
+        .iter()
+        .find(|m| m.path.is_ident(PROPERTY_RENAME_KEY))
+        .map(|m| m.value.clone());
+
     Ok(PropertyItemAttrs {
         prop_typ,
         prop_qty,
+        rename,
         variant: variant.clone(),
     })
+}
+
+fn variant_label(variant: &Ident, attrs: &[Attribute]) -> Result<LitStr, Error> {
+    let rename = find_attribute(PROPERTY_ATTR, attrs)
+        .map(|attr| parse_property_attr(attr, variant))
+        .transpose()?
+        .and_then(|parsed| parsed.rename);
+
+    let label = match rename {
+        Some(rename_typ) => typ_last_segment_name(&rename_typ)?,
+        None => variant.to_string(),
+    };
+    Ok(LitStr::new(&label, variant.span()))
 }
 
 pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenStream {
@@ -587,6 +630,56 @@ mod tests {
         assert_inherited_vis(method);
     }
 
+    fn as_str_label_for(impl_block: &syn::ItemImpl, variant: &str) -> Option<String> {
+        let method = find_method(impl_block, "as_str")?;
+        let Stmt::Expr(Expr::Match(m), _) = &method.block.stmts[0] else {
+            return None;
+        };
+        m.arms.iter().find_map(|arm| {
+            let syn::Pat::Path(p) = &arm.pat else {
+                return None;
+            };
+            if p.path.segments.last()?.ident != variant {
+                return None;
+            }
+            let Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = arm.body.as_ref()
+            else {
+                return None;
+            };
+            Some(s.value())
+        })
+    }
+
+    #[test]
+    fn enum_item_as_str_derive_uses_property_rename_when_present() {
+        let input = parse_enum(
+            r#"enum P {
+                #[property(typ = String, quantity = One, rename = NodeId)] Node,
+                #[property(typ = Int, quantity = One)] Count,
+            }"#,
+        );
+        let file = parse_output(enum_item_as_str_derive(&input));
+        let impl_block = find_impl(&file, "ItemAsStr", "P").expect("impl ItemAsStr for P");
+
+        assert_eq!(
+            as_str_label_for(impl_block, "Node").as_deref(),
+            Some("NodeId")
+        );
+        assert_eq!(
+            as_str_label_for(impl_block, "Count").as_deref(),
+            Some("Count")
+        );
+    }
+
+    #[test]
+    fn enum_item_as_str_derive_malformed_property_attr_emits_compile_error() {
+        let input = parse_enum(r#"enum P { #[property(rename)] Node }"#);
+        assert!(has_compile_error(enum_item_as_str_derive(&input)));
+    }
+
     #[test]
     fn enum_item_from_str_derive_generates_impl() {
         let input = parse_enum("enum Color { Red, Green }");
@@ -632,6 +725,59 @@ mod tests {
             find_impl(&file, "FromStr", "Color").expect("impl FromStr for Color not found");
         let method = find_method(impl_block, "from_str").expect("fn from_str not found");
         assert_inherited_vis(method);
+    }
+
+    fn from_str_variant_for(impl_block: &syn::ItemImpl, label: &str) -> Option<String> {
+        let method = find_method(impl_block, "from_str")?;
+        let Stmt::Expr(Expr::Match(m), _) = &method.block.stmts[0] else {
+            return None;
+        };
+        m.arms.iter().find_map(|arm| {
+            let syn::Pat::Lit(pl) = &arm.pat else {
+                return None;
+            };
+            let syn::Lit::Str(s) = &pl.lit else {
+                return None;
+            };
+            if s.value() != label {
+                return None;
+            }
+            let Expr::Call(call) = arm.body.as_ref() else {
+                return None;
+            };
+            let Expr::Path(p) = call.args.first()? else {
+                return None;
+            };
+            p.path.segments.last().map(|s| s.ident.to_string())
+        })
+    }
+
+    #[test]
+    fn enum_item_from_str_derive_uses_property_rename_when_present() {
+        let input = parse_enum(
+            r#"enum P {
+                #[property(typ = String, quantity = One, rename = NodeId)] Node,
+                #[property(typ = Int, quantity = One)] Count,
+            }"#,
+        );
+        let file = parse_output(enum_item_from_str_derive(&input));
+        let impl_block = find_impl(&file, "FromStr", "P").expect("impl FromStr for P");
+
+        assert_eq!(
+            from_str_variant_for(impl_block, "NodeId").as_deref(),
+            Some("Node")
+        );
+        assert_eq!(
+            from_str_variant_for(impl_block, "Count").as_deref(),
+            Some("Count")
+        );
+        assert!(from_str_variant_for(impl_block, "Node").is_none());
+    }
+
+    #[test]
+    fn enum_item_from_str_derive_malformed_property_attr_emits_compile_error() {
+        let input = parse_enum(r#"enum P { #[property(rename)] Node }"#);
+        assert!(has_compile_error(enum_item_from_str_derive(&input)));
     }
 
     #[test]

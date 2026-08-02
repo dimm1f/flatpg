@@ -149,7 +149,7 @@ pub struct RawEdgeId {
 }
 
 impl RawEdgeId {
-    pub(crate) fn new(src_node_id: RawNodeId, dst_node_id: RawNodeId, handle: EdgeHandle) -> Self {
+    pub fn new(src_node_id: RawNodeId, dst_node_id: RawNodeId, handle: EdgeHandle) -> Self {
         Self {
             src_node_id,
             dst_node_id,

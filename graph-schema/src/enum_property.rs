@@ -15,7 +15,7 @@ pub struct RawEnumId {
 }
 
 impl RawEnumId {
-    pub(crate) fn new(enum_property_index: usize, variant: usize) -> Self {
+    pub fn new(enum_property_index: usize, variant: usize) -> Self {
         assert!(enum_property_index <= u16::MAX as usize);
         assert!(variant <= u16::MAX as usize);
         Self {
