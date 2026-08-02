@@ -5,7 +5,7 @@ use flatpg::{
     property::PropertyValue,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumProperty)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumProperty)]
 enum Status {
     Active,
     Inactive,
@@ -14,7 +14,7 @@ enum Status {
 
 enum_property_registry!(SimplePropEnumsRegistry: Status);
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
     #[property(typ = String, quantity = One)]
     Key,
@@ -28,7 +28,7 @@ enum SimpleProperty {
     State,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
 #[node_kind(schema = SimpleSchema, property_kind = SimpleProperty)]
 enum SimpleNode {
     #[properties(Key, Values)]
@@ -39,7 +39,7 @@ enum SimpleNode {
     Gamma,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, EdgeItemKind)]
 #[edge_kind(schema = SimpleSchema)]
 enum SimpleEdge {
     #[property(typ = None)]

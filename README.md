@@ -36,7 +36,7 @@ A schema is a handful of plain enums, described with derive macros, tied togethe
 Derive this on an enum that lists every property a node can carry.
 
 ```rust
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
     #[property(typ = String, quantity = One)]
     Key,
@@ -56,7 +56,7 @@ Each variant needs a `#[property(typ = ..., quantity = One | Multi)]` attribute 
 Derive this on an enum that lists every node kind in the graph.
 
 ```rust
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
 #[node_kind(schema = SimpleSchema, property_kind = SimpleProperty)]
 enum SimpleNode {
     #[properties(Key, Values)]
@@ -81,7 +81,7 @@ It also generates one combined `Node<'a>` enum (`Node::Alpha(AlphaNode)`, `Node:
 Derive this on an enum that lists every edge kind.
 
 ```rust
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, EdgeItemKind)]
 #[edge_kind(schema = SimpleSchema)]
 enum SimpleEdge {
     #[property(typ = None)]
@@ -103,7 +103,7 @@ enum SimpleEdge {
 Derive this on a plain domain enum you want to store as an `Enum<T>`-typed property value.
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumProperty)]
+#[derive(Debug, Clone, Copy, EnumProperty)]
 enum Status {
     Active,
     Inactive,
@@ -121,7 +121,7 @@ Every `Enum<T>`-typed domain enum a schema uses must be listed in exactly one re
 enum_property_registry!(SimplePropEnumsRegistry: Status);
 
 // equivalent to:
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumPropertyRegistry)]
+#[derive(Debug, Clone, Copy, EnumPropertyRegistry)]
 enum SimplePropEnumsRegistry {
     #[enum_type(Status)]
     Status,
@@ -318,7 +318,7 @@ use flatpg::{
     property::PropertyValue,
 };
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
 enum SimpleProperty {
     #[property(typ = String, quantity = One)]
     Key,
@@ -330,7 +330,7 @@ enum SimpleProperty {
     Ref,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
 #[node_kind(schema = SimpleSchema, property_kind = SimpleProperty)]
 enum SimpleNode {
     #[properties(Key, Values)]
@@ -341,7 +341,7 @@ enum SimpleNode {
     Gamma,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, EdgeItemKind)]
 #[edge_kind(schema = SimpleSchema)]
 enum SimpleEdge {
     #[property(typ = None)]
@@ -350,7 +350,7 @@ enum SimpleEdge {
     Extended,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, EnumPropertyRegistry)]
+#[derive(Clone, Copy, EnumPropertyRegistry)]
 enum NoProps {}
 
 #[derive(Clone, Copy, Default)]

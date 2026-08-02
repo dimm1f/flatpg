@@ -84,7 +84,7 @@ pub(crate) fn expand(def: RegistryDef) -> TokenStream {
 
     let RegistryDef { vis, ident, .. } = def;
     quote! {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumPropertyRegistry)]
+        #[derive(Debug, Clone, Copy, EnumPropertyRegistry)]
         #vis enum #ident {
             #(#variants,)*
         }
@@ -165,15 +165,7 @@ mod tests {
         assert_eq!(item.variants.len(), 2);
 
         let derives = derive_idents(item);
-        for expected in [
-            "Debug",
-            "Clone",
-            "Copy",
-            "PartialEq",
-            "Eq",
-            "Hash",
-            "EnumPropertyRegistry",
-        ] {
+        for expected in ["Debug", "Clone", "Copy", "EnumPropertyRegistry"] {
             assert!(
                 derives.contains(&expected.to_string()),
                 "missing derive: {expected}"

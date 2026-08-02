@@ -29,7 +29,7 @@ pub trait StoredEdge<S: Schema> {
 /// Every edge is stored as two halves, one on each endpoint, so that either
 /// node can look up its incident edges without scanning the whole graph.
 /// `Direction` labels which half a given half-edge is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Direction {
     /// The half stored on the edge's destination node, pointing back at the source.
     In,

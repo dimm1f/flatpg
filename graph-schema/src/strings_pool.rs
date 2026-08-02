@@ -52,4 +52,8 @@ impl StringsPool {
     pub fn get(&self, string_id: RawStringId) -> Option<&str> {
         self.entries.get(string_id.0 as usize).map(|s| s.as_ref())
     }
+
+    pub fn get_arc(&self, string_id: RawStringId) -> Option<Arc<str>> {
+        self.entries.get(string_id.0 as usize).cloned()
+    }
 }

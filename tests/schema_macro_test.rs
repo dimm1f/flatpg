@@ -4,20 +4,20 @@ mod without_registry {
         prelude::*,
     };
 
-    #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
+    #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
     enum MacroProperty {
         #[property(typ = String, quantity = One)]
         Key,
     }
 
-    #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
+    #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
     #[node_kind(schema = MacroSchema, property_kind = MacroProperty)]
     enum MacroNode {
         #[properties(Key)]
         A,
     }
 
-    #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+    #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, EdgeItemKind)]
     #[edge_kind(schema = MacroSchema)]
     enum MacroEdge {
         #[property(typ = None)]
@@ -59,20 +59,20 @@ mod with_registry {
 
     enum_property_registry!(MacroRegistry: MacroStatus);
 
-    #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
+    #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
     enum MacroProperty {
         #[property(typ = Enum<MacroStatus>, quantity = One)]
         State,
     }
 
-    #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
+    #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
     #[node_kind(schema = MacroSchema, property_kind = MacroProperty)]
     enum MacroNode {
         #[properties(State)]
         A,
     }
 
-    #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+    #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, EdgeItemKind)]
     #[edge_kind(schema = MacroSchema)]
     enum MacroEdge {
         #[property(typ = None)]

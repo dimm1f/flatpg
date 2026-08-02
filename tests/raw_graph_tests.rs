@@ -9,20 +9,20 @@ use flatpg::{
     strings_pool::RawStringId,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumProperty)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumProperty)]
 enum Status {
     Active,
     Inactive,
     Banned,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumPropertyRegistry)]
+#[derive(Debug, Clone, Copy, EnumPropertyRegistry)]
 enum TestPropEnumsRegistry {
     #[enum_type(Status)]
     Status,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, PropertyItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
 enum TestProperty {
     #[property(typ = String, quantity = One)]
     Key,
@@ -34,7 +34,7 @@ enum TestProperty {
     State,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, NodeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
 #[node_kind(schema = TestSchema, property_kind = TestProperty)]
 enum TestNode {
     #[properties(Key, Values, State)]
@@ -43,7 +43,7 @@ enum TestNode {
     Beta,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, EdgeItemKind)]
+#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, EdgeItemKind)]
 #[edge_kind(schema = TestSchema)]
 enum TestEdge {
     #[property(typ = None)]

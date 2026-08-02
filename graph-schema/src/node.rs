@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{collections::BTreeMap, fmt::Display};
 
 use crate::{
     AvailableProperties, EdgeDirectionKind, ItemAsStr, ItemIndex, ItemKindPropertyType,
@@ -138,7 +138,7 @@ impl<S: Schema> TryFrom<RawNodeId> for NodeId<S> {
 
 pub struct NewNode<S: Schema> {
     kind: NodeKind<S>,
-    properties: std::collections::HashMap<PropKind<S>, Vec<PropertyValue>>,
+    properties: BTreeMap<PropKind<S>, Vec<PropertyValue>>,
 }
 
 impl<S: Schema> NewNode<S> {
@@ -176,7 +176,7 @@ impl<S: Schema> NewNode<S> {
         self.kind
     }
 
-    pub fn properties(&self) -> &std::collections::HashMap<PropKind<S>, Vec<PropertyValue>> {
+    pub fn properties(&self) -> &BTreeMap<PropKind<S>, Vec<PropertyValue>> {
         &self.properties
     }
 }

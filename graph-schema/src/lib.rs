@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub trait EdgeDirectionKind:
-    Sized + Copy + Clone + ItemFromIndex + ItemAsStr + Eq + Hash + 'static
+    Sized + Copy + Clone + ItemFromIndex + ItemAsStr + Eq + Hash + Ord + 'static
 {
     fn values() -> &'static [Self];
     fn factor(&self) -> usize;
@@ -75,6 +75,7 @@ pub trait NodeItemKind<P: PropertyItemKind>:
     + Clone
     + Eq
     + Hash
+    + Ord
     + 'static
 {
 }
@@ -90,6 +91,7 @@ pub trait EdgeItemKind:
     + Clone
     + Eq
     + Hash
+    + Ord
     + 'static
 {
 }
@@ -105,6 +107,7 @@ pub trait PropertyItemKind:
     + Clone
     + Eq
     + Hash
+    + Ord
     + 'static
 {
 }
@@ -116,12 +119,12 @@ pub trait EnumPropertyIndex:
 }
 
 pub trait EnumPropertyRegistry:
-    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Eq + Hash + 'static
+    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + 'static
 {
     fn variant_count(&self) -> usize;
 }
 
 pub trait EnumProperty:
-    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Eq + Hash + 'static
+    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + 'static
 {
 }

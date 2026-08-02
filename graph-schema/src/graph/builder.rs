@@ -212,7 +212,7 @@ impl<S: Schema> GraphDiff<S> {
 
         let mut seq_counters = vec![0usize; S::number_of_node_kinds()];
 
-        let mut slot_property = HashMap::new();
+        let mut slot_property = BTreeMap::new();
 
         for (i, node) in self.new_nodes.iter().enumerate() {
             // Safety: seq_counters has number_of_node_kinds() elements; node.kind().index() is always in-bounds.
@@ -301,7 +301,7 @@ impl<S: Schema> GraphDiff<S> {
                     .all(|h| !node_is_deleted::<S>(&graph.node_meta_storage, h.node))
             })
             .flatten()
-            .fold(HashMap::new(), |mut acc, half| {
+            .fold(BTreeMap::new(), |mut acc, half| {
                 acc.entry((half.node.kind(), half.direction, half.edge_kind))
                     .or_insert_with(BTreeMap::new)
                     .entry(half.node.seq())
