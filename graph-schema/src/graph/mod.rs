@@ -58,6 +58,7 @@ impl<S: Schema> Graph<S> {
         })
     }
 
+    // Perf: this is an O(n) scan over the kind's node metadata, recomputed on every call.
     pub fn node_count_by_kind(&self, node_kind: NodeKind<S>) -> usize {
         self.node_meta_storage[node_kind.index()]
             .iter()
@@ -65,6 +66,8 @@ impl<S: Schema> Graph<S> {
             .count()
     }
 
+    // Perf: sums `node_count_by_kind` across all kinds, so this is O(total nodes), recomputed
+    // on every call
     pub fn node_count(&self) -> usize {
         S::node_kinds()
             .iter()
@@ -131,11 +134,12 @@ impl<S: Schema> Graph<S> {
             ));
         }
 
-        Ok(self
+        let values = self
             .property_storage
             .get(slot.values_index())
-            .into_iter()
-            .flat_map(move |props| (start..end).filter_map(|i| props.get(i))))
+            .ok_or_else(|| Error::invalid_slot_index(slot.to_string()))?;
+
+        Ok(values.iter_range(start..end))
     }
 
     #[inline]
@@ -184,19 +188,18 @@ impl<S: Schema> Graph<S> {
         let length = end.checked_sub(start)?;
         let start = start.value();
 
+        let neighbors = self
+            .edge_storage
+            .get(slot.neighbors_index())
+            .ok_or_else(|| Error::neighbor_not_found(start))?
+            .try_as_node_id()?;
+        let neighbors = neighbors
+            .get(start..start + length)
+            .ok_or_else(|| Error::neighbor_not_found(start + length))?;
+
         let mut result = Vec::with_capacity(length);
 
-        for i in 0..length {
-            let dst_node = self
-                .edge_storage
-                .get(slot.neighbors_index())
-                .and_then(|x| x.get(start + i))
-                .and_then(|p| match p {
-                    StoredProperty::NodeId(node_ref) => Some(node_ref),
-                    _ => None,
-                })
-                .ok_or_else(|| Error::neighbor_not_found(start + i))?;
-
+        for (i, &dst_node) in neighbors.iter().enumerate() {
             let edge_handle = EdgeHandle::new(edge_kind.index(), direction.factor(), i);
             let edge =
                 S::make_edge((&src_node).into(), dst_node, direction, edge_handle).try_into()?;

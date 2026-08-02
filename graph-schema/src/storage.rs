@@ -123,6 +123,22 @@ impl StorageArray {
         }
     }
 
+    pub fn with_capacity(typ: PropertyType, capacity: usize) -> Self {
+        match typ {
+            PropertyType::None => Self::None,
+            PropertyType::Bool => Self::Bool(Vec::with_capacity(capacity)),
+            PropertyType::Byte => Self::Byte(Vec::with_capacity(capacity)),
+            PropertyType::Short => Self::Short(Vec::with_capacity(capacity)),
+            PropertyType::Int => Self::Int(Vec::with_capacity(capacity)),
+            PropertyType::Long => Self::Long(Vec::with_capacity(capacity)),
+            PropertyType::Float => Self::Float(Vec::with_capacity(capacity)),
+            PropertyType::Double => Self::Double(Vec::with_capacity(capacity)),
+            PropertyType::NodeId => Self::NodeId(Vec::with_capacity(capacity)),
+            PropertyType::String => Self::StringId(Vec::with_capacity(capacity)),
+            PropertyType::Enum => Self::Enum(Vec::with_capacity(capacity)),
+        }
+    }
+
     pub fn typ(&self) -> PropertyType {
         match self {
             StorageArray::Bool(_) => PropertyType::Bool,
@@ -154,6 +170,25 @@ impl StorageArray {
             StorageArray::StringId(v) => v.get(index).cloned().map(StoredProperty::StringId),
             StorageArray::Enum(v) => v.get(index).copied().map(StoredProperty::Enum),
             StorageArray::None => None,
+        }
+    }
+
+    pub fn iter_range(&self, range: std::ops::Range<usize>) -> StorageArrayIter<'_> {
+        match self {
+            StorageArray::Bool(v) => StorageArrayIter::Bool(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::Byte(v) => StorageArrayIter::Byte(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::Short(v) => StorageArrayIter::Short(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::Int(v) => StorageArrayIter::Int(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::Offset(_) => StorageArrayIter::Empty,
+            StorageArray::Long(v) => StorageArrayIter::Long(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::Float(v) => StorageArrayIter::Float(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::Double(v) => StorageArrayIter::Double(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::NodeId(v) => StorageArrayIter::NodeId(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::StringId(v) => {
+                StorageArrayIter::StringId(v.get(range).unwrap_or(&[]).iter())
+            }
+            StorageArray::Enum(v) => StorageArrayIter::Enum(v.get(range).unwrap_or(&[]).iter()),
+            StorageArray::None => StorageArrayIter::Empty,
         }
     }
 
@@ -191,6 +226,45 @@ impl StorageArray {
             (StorageArray::StringId(storage), StorageArray::StringId(v)) => storage.append(v),
             (StorageArray::Enum(storage), StorageArray::Enum(v)) => storage.append(v),
             (StorageArray::None, StorageArray::None) => (),
+            _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
+        }
+        Ok(())
+    }
+
+    pub fn try_splice(&mut self, at: usize, other: StorageArray) -> Result<(), Error> {
+        let target_typ = self.typ();
+        let other_typ = other.typ();
+        match (self, other) {
+            (StorageArray::Bool(storage), StorageArray::Bool(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::Byte(storage), StorageArray::Byte(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::Short(storage), StorageArray::Short(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::Int(storage), StorageArray::Int(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::Long(storage), StorageArray::Long(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::Float(storage), StorageArray::Float(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::Double(storage), StorageArray::Double(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::NodeId(storage), StorageArray::NodeId(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::StringId(storage), StorageArray::StringId(v)) => {
+                storage.splice(at..at, v);
+            }
+            (StorageArray::Enum(storage), StorageArray::Enum(v)) => {
+                storage.splice(at..at, v);
+            }
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
         }
         Ok(())
@@ -513,6 +587,40 @@ impl StorageArray {
 
     pub(crate) fn new_offsets() -> Self {
         Self::Offset(vec![Offset::zero()])
+    }
+}
+
+pub enum StorageArrayIter<'a> {
+    Bool(std::slice::Iter<'a, bool>),
+    Byte(std::slice::Iter<'a, u8>),
+    Short(std::slice::Iter<'a, i16>),
+    Int(std::slice::Iter<'a, i32>),
+    Long(std::slice::Iter<'a, i64>),
+    Float(std::slice::Iter<'a, f32>),
+    Double(std::slice::Iter<'a, f64>),
+    NodeId(std::slice::Iter<'a, RawNodeId>),
+    StringId(std::slice::Iter<'a, RawStringId>),
+    Enum(std::slice::Iter<'a, RawEnumId>),
+    Empty,
+}
+
+impl Iterator for StorageArrayIter<'_> {
+    type Item = StoredProperty;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Bool(it) => it.next().copied().map(StoredProperty::Bool),
+            Self::Byte(it) => it.next().copied().map(StoredProperty::Byte),
+            Self::Short(it) => it.next().copied().map(StoredProperty::Short),
+            Self::Int(it) => it.next().copied().map(StoredProperty::Int),
+            Self::Long(it) => it.next().copied().map(StoredProperty::Long),
+            Self::Float(it) => it.next().copied().map(StoredProperty::Float),
+            Self::Double(it) => it.next().copied().map(StoredProperty::Double),
+            Self::NodeId(it) => it.next().copied().map(StoredProperty::NodeId),
+            Self::StringId(it) => it.next().copied().map(StoredProperty::StringId),
+            Self::Enum(it) => it.next().copied().map(StoredProperty::Enum),
+            Self::Empty => None,
+        }
     }
 }
 

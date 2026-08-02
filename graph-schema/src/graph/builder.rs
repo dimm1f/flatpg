@@ -6,9 +6,11 @@ use crate::{
     error::Error,
     graph::{Graph, GraphView, node_is_deleted},
     node::{NewNode, NodeId, NodeMeta, RawNodeId},
-    property::PropertyValue,
+    property::{PropertyType, PropertyValue},
     schema::{EdgeKind, PropKind, Schema},
-    storage::{EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StoredProperty},
+    storage::{
+        EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StorageArray, StoredProperty,
+    },
     strings_pool::StringsPool,
 };
 
@@ -255,11 +257,14 @@ impl<S: Schema> GraphDiff<S> {
 
                 if let Some(props) = seq_property.get(&start) {
                     let place = offsets[end].value() + delta;
-                    for (i, prop) in props.iter().enumerate() {
-                        let prop = &to_stored_property(prop, &mut graph.strings);
-                        storage.try_insert(place + i, prop)?;
+
+                    let mut batch = StorageArray::with_capacity(storage.typ(), props.len());
+                    for prop in props.iter() {
+                        let prop = to_stored_property(prop, &mut graph.strings);
+                        batch.try_push(&prop)?;
                     }
                     delta += props.len();
+                    storage.try_splice(place, batch)?;
                 }
 
                 offsets[end] = offsets[end].checked_add_delta(delta)?;
@@ -339,10 +344,14 @@ impl<S: Schema> GraphDiff<S> {
                     neigbors.splice(place..place, new_neighbors);
                     delta += halves.len();
 
-                    for (i, half) in halves.iter().enumerate() {
-                        if let Some(prop) = &half.property {
-                            properties.try_insert(place + i, prop)?;
+                    if properties.typ() != PropertyType::None {
+                        let mut batch = StorageArray::with_capacity(properties.typ(), halves.len());
+                        for half in halves.iter() {
+                            if let Some(prop) = &half.property {
+                                batch.try_push(prop)?;
+                            }
                         }
+                        properties.try_splice(place, batch)?;
                     }
                 }
 
