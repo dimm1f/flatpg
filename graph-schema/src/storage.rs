@@ -44,12 +44,14 @@ impl StoredProperty {
     }
 }
 
+type InnerOffset = u32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Offset(u32);
+pub struct Offset(InnerOffset);
 
 impl Offset {
     pub fn new(value: usize) -> Result<Self, Error> {
-        u32::try_from(value)
+        InnerOffset::try_from(value)
             .map(Self)
             .map_err(|_| Error::offset_overflow(value))
     }
@@ -72,7 +74,7 @@ impl Offset {
 
     /// `self + delta`. Fails if the result (or `delta` itself) doesn't fit in `u32`.
     pub fn checked_add_delta(self, delta: usize) -> Result<Self, Error> {
-        let delta = u32::try_from(delta).map_err(|_| Error::offset_overflow(delta))?;
+        let delta = InnerOffset::try_from(delta).map_err(|_| Error::offset_overflow(delta))?;
         self.0
             .checked_add(delta)
             .map(Self)
@@ -81,7 +83,7 @@ impl Offset {
 
     /// `self - delta`. Fails if `delta > self` (offsets not non-decreasing).
     pub fn checked_sub_delta(self, delta: usize) -> Result<Self, Error> {
-        let delta = u32::try_from(delta).map_err(|_| Error::offset_underflow())?;
+        let delta = InnerOffset::try_from(delta).map_err(|_| Error::offset_underflow())?;
         self.0
             .checked_sub(delta)
             .map(Self)

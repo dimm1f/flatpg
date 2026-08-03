@@ -33,7 +33,7 @@ pub enum Error {
     SlotOffsetsNotFound(String),
     #[error("offsets are not found for node.seq \"{0}\"")]
     NodeOffsetNotFound(usize),
-    #[error("offset value {0} exceeds the maximum supported offset (u32::MAX)")]
+    #[error("offset value {0} exceeds the maximum supported offset")]
     OffsetOverflow(usize),
     #[error("offset arithmetic underflowed: CSR offsets must remain non-decreasing")]
     OffsetUnderflow,
