@@ -8,9 +8,7 @@ use crate::{
     node::{NewNode, NodeId, NodeMeta, RawNodeId},
     property::{PropertyType, PropertyValue},
     schema::{EdgeKind, PropKind, Schema},
-    storage::{
-        EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StorageArray, StoredProperty,
-    },
+    storage::{NodeMetaStorage, Offset, StorageArray, StoredProperty},
     strings_pool::StringsPool,
 };
 
@@ -190,27 +188,7 @@ impl<S: Schema> GraphDiff<S> {
             },
         );
 
-        let mut new_nodes = NodeMetaStorage::new();
-        let mut new_properties = PropertyStorage::new();
-        let mut new_edges = EdgeStorage::new();
-
-        for (node_kind, property_kind) in S::property_storage_slots_iter() {
-            let slot = S::property_storage_slot(node_kind, property_kind);
-
-            // Safety: new_properties has property_storage_size() slots; slot.offset_index() is always in-bounds.
-            let offsets = unsafe { new_properties.get_unchecked_mut(slot.offset_index()) }
-                .try_as_offset_mut()?;
-            *offsets = vec![Offset::zero(); new_nodes_count[node_kind.index()] + 1];
-        }
-
-        for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
-            let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
-
-            // Safety: new_edges has edge_storage_size() slots; slot.offset_index() is always in-bounds.
-            let offsets =
-                unsafe { new_edges.get_unchecked_mut(slot.offset_index()) }.try_as_offset_mut()?;
-            *offsets = vec![Offset::zero(); new_nodes_count[node_kind.index()] + 1];
-        }
+        let mut new_nodes: NodeMetaStorage<S> = NodeMetaStorage::new();
 
         let mut seq_counters = vec![0usize; S::number_of_node_kinds()];
 
@@ -238,44 +216,76 @@ impl<S: Schema> GraphDiff<S> {
             }
         }
 
-        for ((node_kind, property_kind), seq_property) in slot_property {
+        for kind in S::node_kinds() {
+            // Safety: both graph.node_meta_storage and new_nodes have number_of_node_kinds()
+            // slots; kind.index() is in-bounds; separate storages cannot alias.
+            let nodes = unsafe { graph.node_meta_storage.get_unchecked_mut(kind.index()) };
+            let new_kind_nodes = unsafe { new_nodes.get_unchecked_mut(kind.index()) };
+            nodes.append(new_kind_nodes);
+        }
+
+        // WARN: Properties and edges are inserted directly into the graph so any issues at this stage can corrupt the graph
+        for (node_kind, property_kind) in S::property_storage_slots_iter() {
+            let nodes_count = new_nodes_count[node_kind.index()];
+            if nodes_count == 0 {
+                continue;
+            }
+
             let slot = S::property_storage_slot(node_kind, property_kind);
 
-            // Safety: new_properties has property_storage_size() slots; slot guarantees both indices are in-bounds and distinct.
+            // Safety: graph.property_storage has property_storage_size() slots; slot guarantees both indices are in-bounds and distinct.
             let [offsets, storage] = unsafe {
-                new_properties
+                graph
+                    .property_storage
                     .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
             };
-
             let offsets = offsets.try_as_offset_mut()?;
 
-            let mut delta = 0;
+            let seq_property = slot_property
+                .get(&(node_kind, property_kind))
+                .filter(|m| !m.is_empty());
 
-            #[allow(clippy::needless_range_loop)]
-            for end in 1..offsets.len() {
-                let start = end - 1;
+            let Some(seq_property) = seq_property else {
+                if !offsets.is_empty() {
+                    let last = offsets.last().copied().unwrap_or_else(Offset::zero);
+                    offsets.resize(offsets.len() + nodes_count, last);
+                }
+                continue;
+            };
 
-                if let Some(props) = seq_property.get(&start) {
-                    let place = offsets[end].value() + delta;
+            if offsets.is_empty() {
+                let existing = graph_nodes_max_seq[node_kind.index()];
+                offsets.resize(existing + 1, Offset::zero());
+            }
 
+            let mut cumulative = offsets.last().copied().unwrap_or_else(Offset::zero);
+            for local_index in 0..nodes_count {
+                if let Some(props) = seq_property.get(&local_index) {
                     let mut batch = StorageArray::with_capacity(storage.typ(), props.len());
                     for prop in props.iter() {
                         let prop = to_stored_property(prop, &mut graph.strings);
                         batch.try_push(&prop)?;
                     }
-                    delta += props.len();
-                    storage.try_splice(place, batch)?;
+                    cumulative = cumulative.checked_add_delta(props.len())?;
+                    storage.try_append(&mut batch)?;
                 }
-
-                offsets[end] = offsets[end].checked_add_delta(delta)?;
+                offsets.push(cumulative);
             }
         }
 
-        // Append new items into the graph
-        graph.node_meta_storage.append(new_nodes);
-        graph.property_storage.append(new_properties)?;
-        // Initialize the offsers array with new nodes offsets
-        graph.edge_storage.append(new_edges)?;
+        for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
+            let nodes_count = new_nodes_count[node_kind.index()];
+            if nodes_count == 0 {
+                continue;
+            }
+            let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
+            let offsets = graph.edge_storage[slot.offset_index()].try_as_offset_mut()?;
+            if offsets.is_empty() {
+                continue;
+            }
+            let last = offsets.last().copied().unwrap_or_else(Offset::zero);
+            offsets.resize(offsets.len() + nodes_count, last);
+        }
 
         let resolve_node_ref = |node: &NewOrExistingNode| -> Option<RawNodeId> {
             match node {
@@ -283,8 +293,6 @@ impl<S: Schema> GraphDiff<S> {
                 NewOrExistingNode::Existing(node_ref) => Some(*node_ref),
             }
         };
-
-        // WARN: Edges are inserted directly into the graph so any issues at this stage can corrupt the graph
 
         let slot_edge_halves = self
             .new_edges
@@ -330,6 +338,18 @@ impl<S: Schema> GraphDiff<S> {
 
             let offsets = offsets.try_as_offset_mut()?;
             let neigbors = neigbors.try_as_node_id_mut()?;
+
+            if !seq_halves.is_empty() {
+                let offsets_len = graph.node_meta_storage[node_kind.index()].len() + 1;
+                if offsets.is_empty() {
+                    *offsets = vec![Offset::zero(); offsets_len];
+                } else if offsets.len() != offsets_len {
+                    let last = offsets.last().cloned().unwrap_or_else(Offset::zero);
+                    offsets.resize(offsets_len, last);
+                }
+            } else {
+                continue;
+            }
 
             let mut delta = 0;
 

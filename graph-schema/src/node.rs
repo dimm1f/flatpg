@@ -136,6 +136,7 @@ impl<S: Schema> TryFrom<RawNodeId> for NodeId<S> {
     }
 }
 
+#[derive(Debug)]
 pub struct NewNode<S: Schema> {
     kind: NodeKind<S>,
     properties: BTreeMap<PropKind<S>, Vec<PropertyValue>>,

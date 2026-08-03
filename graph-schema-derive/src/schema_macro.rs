@@ -50,7 +50,7 @@ pub(crate) fn expand(def: SchemaDef) -> TokenStream {
     };
 
     quote! {
-        #[derive(Clone, Copy, Default)]
+        #[derive(Clone, Copy, Default, Debug)]
         #vis struct #ident;
 
         impl flatpg::schema::Schema for #ident {

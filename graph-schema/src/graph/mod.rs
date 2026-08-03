@@ -148,18 +148,20 @@ impl<S: Schema> Graph<S> {
         node: RawNodeId,
         slot: EdgeStorageSlot,
     ) -> Result<(Offset, Offset), Error> {
-        self.edge_storage
+        let offsets = self
+            .edge_storage
             .get(slot.offset_index())
             .ok_or_else(|| Error::slot_offsets_not_found(slot.to_string()))
-            .and_then(StorageArray::try_as_offset)
-            .map(|v| v.get(node.seq()..=(node.seq() + 1)))
-            .and_then(|o| {
-                if let Some([start, end]) = o {
-                    Ok((*start, *end))
-                } else {
-                    Err(Error::node_offset_not_found(node.seq()))
-                }
-            })
+            .and_then(StorageArray::try_as_offset)?;
+
+        if offsets.is_empty() {
+            return Ok((Offset::zero(), Offset::zero()));
+        }
+
+        match offsets.get(node.seq()..=(node.seq() + 1)) {
+            Some([start, end]) => Ok((*start, *end)),
+            _ => Err(Error::node_offset_not_found(node.seq())),
+        }
     }
     pub fn get_edges_count(
         &self,

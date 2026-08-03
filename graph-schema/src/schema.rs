@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 use crate::edge::{Direction, EdgeHandle, RawEdgeId};
 use crate::error::Error;
@@ -97,7 +97,7 @@ pub type EdgeKind<S> = <S as Schema>::E;
 pub type PropKind<S> = <S as Schema>::P;
 pub type EnumPropRegistry<S> = <S as Schema>::EPR;
 
-pub trait Schema: Sized + Clone + Copy {
+pub trait Schema: Sized + Clone + Copy + Debug {
     type N: NodeItemKind<Self::P>;
     type E: EdgeItemKind;
     type P: PropertyItemKind;

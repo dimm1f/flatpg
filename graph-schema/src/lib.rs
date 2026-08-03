@@ -8,7 +8,7 @@ pub mod schema;
 pub mod storage;
 pub mod strings_pool;
 
-use std::{hash::Hash, str::FromStr};
+use std::{fmt::Debug, hash::Hash, str::FromStr};
 
 use crate::{
     edge::{EdgeHandle, RawEdgeId},
@@ -76,6 +76,7 @@ pub trait NodeItemKind<P: PropertyItemKind>:
     + Eq
     + Hash
     + Ord
+    + Debug
     + 'static
 {
 }
@@ -92,6 +93,7 @@ pub trait EdgeItemKind:
     + Eq
     + Hash
     + Ord
+    + Debug
     + 'static
 {
 }
@@ -108,23 +110,24 @@ pub trait PropertyItemKind:
     + Eq
     + Hash
     + Ord
+    + Debug
     + 'static
 {
 }
 
 pub trait EnumPropertyIndex:
-    ItemAsStr + ItemIndex + ItemFromIndex + ItemAll + ItemFromStr + 'static
+    ItemAsStr + ItemIndex + ItemFromIndex + ItemAll + ItemFromStr + Debug + 'static
 {
     fn enum_property_index() -> usize;
 }
 
 pub trait EnumPropertyRegistry:
-    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + 'static
+    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Debug + 'static
 {
     fn variant_count(&self) -> usize;
 }
 
 pub trait EnumProperty:
-    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + 'static
+    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Debug + 'static
 {
 }

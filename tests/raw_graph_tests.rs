@@ -5,7 +5,7 @@ use flatpg::{
     prelude::*,
     property::PropertyValue,
     schema::Schema,
-    storage::StorageArray,
+    storage::{Offset, StorageArray},
     strings_pool::RawStringId,
 };
 
@@ -52,7 +52,7 @@ enum TestEdge {
     Labeled,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct TestSchema;
 
 impl Schema for TestSchema {
@@ -81,6 +81,9 @@ fn shrink_node_count<S: Schema>(raw: &mut RawGraph<S>, kind: S::N) {
         let offsets = raw.property_storage[slot.offset_index()]
             .try_as_offset_mut()
             .unwrap();
+        if offsets.is_empty() {
+            continue;
+        }
         let removed_end = offsets.pop().unwrap();
         let new_end = *offsets.last().unwrap();
         let range = new_end.value()..removed_end.value();
@@ -97,6 +100,9 @@ fn shrink_node_count<S: Schema>(raw: &mut RawGraph<S>, kind: S::N) {
         let offsets = raw.edge_storage[slot.offset_index()]
             .try_as_offset_mut()
             .unwrap();
+        if offsets.is_empty() {
+            continue;
+        }
         let removed_end = offsets.pop().unwrap();
         let new_end = *offsets.last().unwrap();
         let range = new_end.value()..removed_end.value();
@@ -120,7 +126,11 @@ fn build_two_alpha_values_graph() -> Graph<TestSchema> {
             .unwrap()
             .build(),
     );
-    diff.apply(Graph::new()).expect("apply diff")
+    let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+    graph
 }
 
 #[test]
@@ -150,6 +160,9 @@ fn populated_graph_round_trips_through_raw_graph() {
         Some(PropertyValue::String("p0".to_string())),
     );
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let raw: RawGraph<TestSchema> = graph.into();
     let graph: Graph<TestSchema> = raw.try_into().expect("populated graph is valid");
@@ -174,6 +187,9 @@ fn edge_to_soft_deleted_node_passes_check_integrity() {
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let beta = graph
         .nodes_by_kind(TestNode::Beta)
@@ -182,6 +198,9 @@ fn edge_to_soft_deleted_node_passes_check_integrity() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&beta);
     let graph = diff.apply(graph).expect("apply remove");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert!(graph.check_integrity().is_ok());
 }
@@ -267,6 +286,9 @@ fn storage_type_mismatch_is_rejected() {
             .build(),
     );
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
     let slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Key);
@@ -285,6 +307,9 @@ fn dangling_node_id_out_of_bounds_is_rejected() {
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
     shrink_node_count(&mut raw, TestNode::Beta);
@@ -312,6 +337,9 @@ fn foreign_string_id_is_rejected() {
             .build(),
     );
     let graph_a = diff_a.apply(Graph::new()).expect("apply a");
+    graph_a
+        .check_integrity()
+        .expect("graph passes integrity check");
     let raw_a: RawGraph<TestSchema> = graph_a.into();
     let values_slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values);
     let foreign_id: RawStringId = raw_a.property_storage[values_slot.values_index()]
@@ -326,6 +354,9 @@ fn foreign_string_id_is_rejected() {
             .build(),
     );
     let graph_b = diff_b.apply(Graph::new()).expect("apply b");
+    graph_b
+        .check_integrity()
+        .expect("graph passes integrity check");
     let mut raw_b: RawGraph<TestSchema> = graph_b.into();
     let key_slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Key);
     raw_b.property_storage[key_slot.values_index()]
@@ -345,19 +376,18 @@ fn unpaired_half_edge_is_rejected() {
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
     let in_plain = TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Plain);
-    let out_plain = TestSchema::edge_storage_slot(TestNode::Beta, Direction::Out, TestEdge::Plain);
 
-    let zero = raw.edge_storage[out_plain.offset_index()]
-        .try_as_offset()
-        .unwrap()[0];
     let offsets = raw.edge_storage[in_plain.offset_index()]
         .try_as_offset_mut()
         .unwrap();
     let last = offsets.len() - 1;
-    offsets[last] = zero;
+    offsets[last] = Offset::zero();
     raw.edge_storage[in_plain.neighbors_index()]
         .try_as_node_id_mut()
         .unwrap()
@@ -387,6 +417,9 @@ fn parallel_edge_degree_mismatch_is_rejected() {
         Some(PropertyValue::String("l0".to_string())),
     );
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
     let alpha_out_labeled =

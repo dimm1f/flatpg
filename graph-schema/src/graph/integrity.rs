@@ -90,8 +90,8 @@ pub(crate) fn check_integrity<S: Schema>(
         check_values_content::<S>(properties_arr, node_meta_storage, strings)?;
 
         for seq in 0..expected_count {
-            let start = offsets[seq].value();
-            let end = offsets[seq + 1].value();
+            let start = offsets.get(seq).unwrap_or(&Offset::zero()).value();
+            let end = offsets.get(seq + 1).unwrap_or(&Offset::zero()).value();
             let node = RawNodeId::new(node_kind.index(), seq);
             for &neighbor in &neighbors[start..end] {
                 *half_edge_counts
@@ -139,6 +139,9 @@ fn check_storage_sizes<S: Schema>(
 /// each value must be greater than or equal to the one before it. The non-decreasing check
 /// uses [`Offset::checked_sub`], since `Offset` guarantees it can never go negative.
 fn check_offsets_shape(slot: &str, offsets: &[Offset], expected_count: usize) -> Result<(), Error> {
+    if offsets.is_empty() {
+        return Ok(());
+    }
     if offsets.len() != expected_count + 1 {
         return Err(Error::offsets_length_mismatch(
             slot,

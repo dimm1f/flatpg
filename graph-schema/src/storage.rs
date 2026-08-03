@@ -4,7 +4,6 @@ use std::{
 };
 
 use crate::{
-    ItemIndex,
     enum_property::RawEnumId,
     error::Error,
     node::{NodeMeta, RawNodeId},
@@ -72,7 +71,7 @@ impl Offset {
             .ok_or_else(Error::offset_underflow)
     }
 
-    /// `self + delta`. Fails if the result (or `delta` itself) doesn't fit in `u32`.
+    /// `self + delta`. Fails if the result (or `delta` itself) doesn't fit in `InnerOffset`.
     pub fn checked_add_delta(self, delta: usize) -> Result<Self, Error> {
         let delta = InnerOffset::try_from(delta).map_err(|_| Error::offset_overflow(delta))?;
         self.0
@@ -123,6 +122,13 @@ impl StorageArray {
             PropertyType::String => Self::StringId(Vec::new()),
             PropertyType::Enum => Self::Enum(Vec::new()),
         }
+    }
+
+    // TODO: Offsets should be stored separately with properties.
+    // This can be implemented by defining slots in EgdeStorage
+    // and PropertyStorage as Struct of Arrays.
+    pub fn new_offsets() -> Self {
+        Self::Offset(Vec::new())
     }
 
     pub fn with_capacity(typ: PropertyType, capacity: usize) -> Self {
@@ -586,10 +592,6 @@ impl StorageArray {
     fn casting_error(&self, target: PropertyType) -> Error {
         Error::invalid_property_type(target, self.typ())
     }
-
-    pub fn new_offsets() -> Self {
-        Self::Offset(vec![Offset::zero()])
-    }
 }
 
 pub enum StorageArrayIter<'a> {
@@ -636,15 +638,6 @@ impl<S: Schema> NodeMetaStorage<S> {
         Self {
             storage: vec![Vec::default(); S::number_of_node_kinds()],
             _phantom: PhantomData,
-        }
-    }
-
-    pub fn append(&mut self, mut other: Self) {
-        for kind in S::node_kinds() {
-            // Safety: both vecs have number_of_node_kinds() slots; kind.index() is in-bounds; separate vecs cannot alias.
-            let nodes = unsafe { self.storage.get_unchecked_mut(kind.index()) };
-            let other_nodes = unsafe { other.storage.get_unchecked_mut(kind.index()) };
-            nodes.append(other_nodes);
         }
     }
 }
@@ -697,47 +690,6 @@ impl<S: Schema> EdgeStorage<S> {
             storage,
             _phantom: PhantomData,
         }
-    }
-
-    pub fn append(&mut self, mut other: Self) -> Result<(), Error> {
-        for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
-            let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
-
-            // Safety: storage has edge_storage_size() slots; slot guarantees all three indices are in-bounds and pairwise distinct.
-            let [offsets, neighbors, properties] = unsafe {
-                self.storage.get_disjoint_unchecked_mut([
-                    slot.offset_index(),
-                    slot.neighbors_index(),
-                    slot.properties_index(),
-                ])
-            };
-            let offsets = offsets.try_as_offset_mut().unwrap();
-
-            // Safety: storage has edge_storage_size() slots; same bounds/disjointness as above; separate vec, no aliasing with self.0.
-            let [other_offsets, other_neighbors, other_properties] = unsafe {
-                other.storage.get_disjoint_unchecked_mut([
-                    slot.offset_index(),
-                    slot.neighbors_index(),
-                    slot.properties_index(),
-                ])
-            };
-            let other_offsets = other_offsets.try_as_offset().unwrap();
-
-            let start_offset = offsets.last().copied().unwrap_or_else(Offset::zero);
-            offsets.reserve(other_offsets.len());
-
-            let start = if offsets.is_empty() { 0 } else { 1 };
-            for &offset in &other_offsets[start..] {
-                offsets.push(Offset::new(offset.value() + start_offset.value())?);
-            }
-
-            assert_eq!(neighbors.typ(), other_neighbors.typ());
-            neighbors.try_append(other_neighbors).unwrap();
-
-            assert_eq!(properties.typ(), other_properties.typ());
-            properties.try_append(other_properties).unwrap();
-        }
-        Ok(())
     }
 }
 
@@ -794,40 +746,6 @@ impl<S: Schema> PropertyStorage<S> {
             storage,
             _phantom: PhantomData,
         }
-    }
-
-    pub fn append(&mut self, mut other: Self) -> Result<(), Error> {
-        for (node_kind, property_kind) in S::property_storage_slots_iter() {
-            let slot = S::property_storage_slot(node_kind, property_kind);
-
-            // Safety: self.0 has property_storage_size() slots; slot guarantees both indices are in-bounds and distinct.
-            let [offsets, values] = unsafe {
-                self.storage
-                    .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
-            };
-            // Panic: The storage is build based on schema, so the properties have right types
-            let offsets = offsets.try_as_offset_mut().unwrap();
-
-            // Safety: other.0 has property_storage_size() slots; same bounds/disjointness as above; separate vec, no aliasing with self.0.
-            let [other_offsets, other_values] = unsafe {
-                other
-                    .storage
-                    .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
-            };
-            let other_offsets = other_offsets.try_as_offset().unwrap();
-
-            let start_offset = offsets.last().copied().unwrap_or_else(Offset::zero);
-            offsets.reserve(other_offsets.len());
-
-            let start = if offsets.is_empty() { 0 } else { 1 };
-            for &offset in &other_offsets[start..] {
-                offsets.push(Offset::new(offset.value() + start_offset.value())?);
-            }
-
-            assert_eq!(values.typ(), other_values.typ());
-            values.try_append(other_values).unwrap();
-        }
-        Ok(())
     }
 }
 

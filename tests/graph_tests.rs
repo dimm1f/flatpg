@@ -93,7 +93,7 @@ enum TestEdge {
     Tagged,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct TestSchema;
 
 impl Schema for TestSchema {
@@ -125,6 +125,9 @@ fn edge_property_is_visible_from_both_endpoints() {
         Some(PropertyValue::String("p0".into())),
     );
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -168,6 +171,9 @@ fn stored_edge_struct_and_edge_enum_match_graph_get_edges() {
         Some(PropertyValue::String("p0".into())),
     );
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -232,6 +238,9 @@ fn in_edge_properties_match_their_edges() {
         Some(PropertyValue::String("p1".into())),
     );
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let beta = graph
         .nodes_by_kind(TestNode::Beta)
@@ -273,6 +282,9 @@ fn stored_node_edge_accessors_return_incident_edges() {
         Some(PropertyValue::String("p1".into())),
     );
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha0 = AlphaNode::new(&graph, 0);
     let beta = BetaNode::new(&graph, 0);
@@ -346,6 +358,9 @@ fn add_single_node_to_empty_graph() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
     assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "main.rs");
@@ -364,6 +379,9 @@ fn add_node_with_enum_property_round_trips() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
     assert_eq!(AlphaNode::new(&graph, 0).state().unwrap(), Status::Banned);
@@ -386,6 +404,9 @@ fn add_multiple_nodes_same_kind_preserves_order() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 2);
     assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "a.rs");
@@ -409,6 +430,9 @@ fn add_nodes_of_different_kinds() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
     assert_eq!(graph.node_count_by_kind(TestNode::Beta), 1);
@@ -422,6 +446,9 @@ fn add_node_without_properties() {
     diff.add_node(builders::AlphaNodeBuilder::new().build());
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
 }
@@ -436,6 +463,9 @@ fn apply_incremental_to_existing_graph() {
             .build(),
     );
     let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
 
     let mut diff2 = GraphDiff::<TestSchema>::default();
@@ -446,6 +476,9 @@ fn apply_incremental_to_existing_graph() {
             .build(),
     );
     let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 2);
 
     assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "first.rs");
@@ -476,6 +509,9 @@ fn apply_accepts_any_graph_view_implementor() {
     let graph = diff
         .apply(TestGraphWrapper(Graph::new()))
         .expect("apply via GraphView wrapper");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
     assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "wrapped.rs");
 }
@@ -493,6 +529,9 @@ fn add_node_with_multi_valued_property_stores_all_values() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(
         AlphaNode::new(&graph, 0).values().unwrap(),
@@ -520,6 +559,9 @@ fn multi_valued_property_offsets_are_correct_across_nodes() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(
         AlphaNode::new(&graph, 0).values().unwrap(),
@@ -530,6 +572,142 @@ fn multi_valued_property_offsets_are_correct_across_nodes() {
 }
 
 #[test]
+fn add_node_without_property_then_node_with_property() {
+    let mut diff1 = GraphDiff::<TestSchema>::default();
+    diff1.add_node(builders::AlphaNodeBuilder::new().build());
+    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut diff2 = GraphDiff::<TestSchema>::default();
+    diff2.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Key, "b.rs".to_string())
+            .unwrap()
+            .build(),
+    );
+    let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert!(matches!(
+        AlphaNode::new(&graph, 0).key(),
+        Err(Error::PropertyIndexNotFound)
+    ));
+    assert_eq!(AlphaNode::new(&graph, 1).key().unwrap(), "b.rs");
+}
+
+#[test]
+fn add_node_with_property_then_node_without_property() {
+    let mut diff1 = GraphDiff::<TestSchema>::default();
+    diff1.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Key, "a.rs".to_string())
+            .unwrap()
+            .build(),
+    );
+    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut diff2 = GraphDiff::<TestSchema>::default();
+    diff2.add_node(builders::AlphaNodeBuilder::new().build());
+    let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "a.rs");
+    assert!(matches!(
+        AlphaNode::new(&graph, 1).key(),
+        Err(Error::PropertyIndexNotFound)
+    ));
+}
+
+#[test]
+fn add_three_nodes_with_property_gap_in_middle() {
+    let mut diff1 = GraphDiff::<TestSchema>::default();
+    diff1.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Key, "a.rs".to_string())
+            .unwrap()
+            .build(),
+    );
+    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut diff2 = GraphDiff::<TestSchema>::default();
+    diff2.add_node(builders::AlphaNodeBuilder::new().build());
+    let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut diff3 = GraphDiff::<TestSchema>::default();
+    diff3.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Key, "c.rs".to_string())
+            .unwrap()
+            .build(),
+    );
+    let graph = diff3.apply(graph).expect("apply diff 3");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "a.rs");
+    assert!(matches!(
+        AlphaNode::new(&graph, 1).key(),
+        Err(Error::PropertyIndexNotFound)
+    ));
+    assert_eq!(AlphaNode::new(&graph, 2).key().unwrap(), "c.rs");
+}
+
+#[test]
+fn add_three_nodes_without_property_gap_in_middle() {
+    let mut diff1 = GraphDiff::<TestSchema>::default();
+    diff1.add_node(builders::AlphaNodeBuilder::new().build());
+    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut diff2 = GraphDiff::<TestSchema>::default();
+    diff2.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Key, "b.rs".to_string())
+            .unwrap()
+            .build(),
+    );
+    let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut diff3 = GraphDiff::<TestSchema>::default();
+    diff3.add_node(builders::AlphaNodeBuilder::new().build());
+    let graph = diff3.apply(graph).expect("apply diff 3");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert!(matches!(
+        AlphaNode::new(&graph, 0).key(),
+        Err(Error::PropertyIndexNotFound)
+    ));
+    assert_eq!(AlphaNode::new(&graph, 1).key().unwrap(), "b.rs");
+    assert!(matches!(
+        AlphaNode::new(&graph, 2).key(),
+        Err(Error::PropertyIndexNotFound)
+    ));
+}
+
+#[test]
 fn add_edge_between_new_nodes() {
     let mut diff = GraphDiff::<TestSchema>::default();
     let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
@@ -537,6 +715,9 @@ fn add_edge_between_new_nodes() {
     diff.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -568,6 +749,9 @@ fn add_edge_endpoints_are_correct() {
     diff.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -598,6 +782,9 @@ fn add_multiple_edges_same_kind() {
     diff.add_edge(alpha_id, beta2_id, TestEdge::Plain, None);
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -617,6 +804,9 @@ fn add_edge_between_existing_nodes() {
     setup.add_node(builders::AlphaNodeBuilder::new().build());
     setup.add_node(builders::BetaNodeBuilder::new().build());
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha_ref = RawNodeId::from(
         &graph
@@ -634,6 +824,9 @@ fn add_edge_between_existing_nodes() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.add_edge(alpha_ref, beta_ref, TestEdge::Plain, None);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(
         graph
@@ -654,6 +847,9 @@ fn add_edge_between_new_and_existing_node() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha_ref = RawNodeId::from(
         &graph
@@ -666,6 +862,9 @@ fn add_edge_between_new_and_existing_node() {
     let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
     diff.add_edge(alpha_ref, beta_id, TestEdge::Plain, None);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let beta = graph
         .nodes_by_kind(TestNode::Beta)
@@ -698,6 +897,9 @@ fn add_edge_with_property_stores_property() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -725,7 +927,11 @@ fn setup_three_file_nodes() -> Graph<TestSchema> {
                 .build(),
         );
     }
-    setup.apply(Graph::new()).expect("apply setup")
+    let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+    graph
 }
 
 #[test]
@@ -736,6 +942,9 @@ fn remove_first_of_many_nodes_preserves_others() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[0]);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 2);
     let remaining: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::Alpha).collect();
@@ -757,6 +966,9 @@ fn remove_middle_of_many_nodes_preserves_others() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[1]);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 2);
     let remaining: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::Alpha).collect();
@@ -778,6 +990,9 @@ fn remove_last_of_many_nodes_preserves_others() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[2]);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 2);
     let remaining: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::Alpha).collect();
@@ -805,6 +1020,9 @@ fn setup_graph_with_fan_out_edges() -> (
         setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
     }
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -838,6 +1056,9 @@ fn remove_first_of_many_out_edges_preserves_others() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_edge(edge_to_b0);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let dsts = out_edge_dst_seqs(&graph, alpha);
     assert_eq!(dsts.len(), 2);
@@ -880,6 +1101,9 @@ fn remove_middle_of_many_out_edges_preserves_others() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_edge(edge_to_b1);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let dsts = out_edge_dst_seqs(&graph, alpha);
     assert_eq!(dsts.len(), 2);
@@ -910,6 +1134,9 @@ fn remove_last_of_many_out_edges_preserves_others() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_edge(edge_to_b2);
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let dsts = out_edge_dst_seqs(&graph, alpha);
     assert_eq!(dsts.len(), 2);
@@ -937,6 +1164,9 @@ fn update_first_of_many_nodes_leaves_others_unchanged() {
         QuantifiedProperty::One(PropertyValue::String("updated.rs".to_string())),
     );
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "updated.rs");
     assert_eq!(AlphaNode::new(&graph, 1).key().unwrap(), "b.rs");
@@ -955,6 +1185,9 @@ fn update_middle_of_many_nodes_leaves_others_unchanged() {
         QuantifiedProperty::One(PropertyValue::String("updated.rs".to_string())),
     );
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "a.rs");
     assert_eq!(AlphaNode::new(&graph, 1).key().unwrap(), "updated.rs");
@@ -973,6 +1206,9 @@ fn update_last_of_many_nodes_leaves_others_unchanged() {
         QuantifiedProperty::One(PropertyValue::String("updated.rs".to_string())),
     );
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(AlphaNode::new(&graph, 0).key().unwrap(), "a.rs");
     assert_eq!(AlphaNode::new(&graph, 1).key().unwrap(), "b.rs");
@@ -1007,6 +1243,9 @@ fn update_multi_valued_property_shrink_then_grow_leaves_siblings_unchanged() {
             .build(),
     );
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     let nodes: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::Alpha).collect();
 
     // Shrink node 0's Values from 3 entries down to 1. The offsets loop in
@@ -1019,6 +1258,9 @@ fn update_multi_valued_property_shrink_then_grow_leaves_siblings_unchanged() {
         QuantifiedProperty::Multi(vec![PropertyValue::String("z0".to_string())]),
     );
     let graph = shrink.apply(graph).expect("apply shrink");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(
         AlphaNode::new(&graph, nodes[0].seq()).values().unwrap(),
@@ -1047,6 +1289,9 @@ fn update_multi_valued_property_shrink_then_grow_leaves_siblings_unchanged() {
         ),
     );
     let graph = grow.apply(graph).expect("apply grow");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(
         AlphaNode::new(&graph, nodes[0].seq()).values().unwrap(),
@@ -1072,6 +1317,9 @@ fn add_node_remove_then_add_new_node_is_accessible() {
             .build(),
     );
     let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let node = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -1080,6 +1328,9 @@ fn add_node_remove_then_add_new_node_is_accessible() {
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.remove_node(&node);
     let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 0);
 
     let mut diff3 = GraphDiff::<TestSchema>::default();
@@ -1090,6 +1341,9 @@ fn add_node_remove_then_add_new_node_is_accessible() {
             .build(),
     );
     let graph = diff3.apply(graph).expect("apply diff 3");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
     let remaining = graph
@@ -1112,6 +1366,9 @@ fn add_property_remove_then_readd_restores_value() {
             .build(),
     );
     let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     let node = graph
         .nodes_by_kind(TestNode::Alpha)
         .next()
@@ -1120,6 +1377,9 @@ fn add_property_remove_then_readd_restores_value() {
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.update_node_property(&node, TestProperty::Key, QuantifiedProperty::Multi(vec![]));
     let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     assert_eq!(
         graph
             .get_node_property(RawNodeId::from(&node), TestProperty::Key)
@@ -1135,6 +1395,9 @@ fn add_property_remove_then_readd_restores_value() {
         QuantifiedProperty::One(PropertyValue::String("restored.rs".to_string())),
     );
     let graph = diff3.apply(graph).expect("apply diff 3");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(
         AlphaNode::new(&graph, node.seq()).key().unwrap(),
@@ -1149,6 +1412,9 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -1165,6 +1431,9 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.remove_edge(edges.into_iter().next().unwrap());
     let graph = diff2.apply(graph).expect("apply diff 2");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     assert_eq!(
         graph
             .get_edges_count(RawNodeId::from(&alpha), TestEdge::Plain, Direction::Out)
@@ -1180,6 +1449,9 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
         None,
     );
     let graph = diff3.apply(graph).expect("apply diff 3");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     assert_eq!(
         graph
@@ -1216,6 +1488,9 @@ fn gamma_node_scalar_properties_round_trip() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     let gamma = GammaNode::new(&graph, 0);
 
     assert!(gamma.flag().unwrap());
@@ -1231,6 +1506,9 @@ fn gamma_node_with_node_id_property_round_trips() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
         .next()
@@ -1244,6 +1522,9 @@ fn gamma_node_with_node_id_property_round_trips() {
             .build(),
     );
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let gamma = GammaNode::new(&graph, 0);
     let linked = gamma.linked_node().unwrap();
@@ -1264,6 +1545,9 @@ fn gamma_node_multi_valued_enum_property_round_trips() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     let gamma = GammaNode::new(&graph, 0);
 
     assert_eq!(gamma.tags().unwrap(), vec![Status::Active, Status::Banned]);
@@ -1318,6 +1602,9 @@ fn edge_scalar_properties_round_trip() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
         .next()
@@ -1409,6 +1696,9 @@ fn edge_with_node_id_property_round_trips() {
     setup.add_node(builders::AlphaNodeBuilder::new().build());
     setup.add_node(builders::BetaNodeBuilder::new().build());
     let graph = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
@@ -1427,6 +1717,9 @@ fn edge_with_node_id_property_round_trips() {
         Some(PropertyValue::from(beta)),
     );
     let graph = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
 
     let edge_id = graph
         .get_edges(alpha, TestEdge::RefersTo, Direction::Out)
@@ -1467,6 +1760,9 @@ fn edge_with_enum_property_round_trips() {
     );
 
     let graph = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
     let alpha = graph
         .nodes_by_kind(TestNode::Alpha)
         .next()
