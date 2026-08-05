@@ -9,84 +9,45 @@ use crate::{
     ItemIndex, ItemKindPropertyType, NodeItemKind, PropertyItemKind,
 };
 
-// Constants
-const NEIGHBORS_SLOT_SIZE: usize = 3;
-const PROPERTY_SLOT_SIZE: usize = 2;
-
-/// A handle to a group of consecutive entries in the flat edge storage array.
-///
-/// Each slot covers [`EdgeStorageSlot::size`] entries: one for offsets, one for
-/// neighbors, and one for edge properties.
+/// An index into `EdgeStorage` for a given
+/// `(node_kind, direction, edge_kind)` combination.
 #[derive(Debug, Clone, Copy)]
-pub struct EdgeStorageSlot(usize);
+pub struct EdgeStorageSlotIndex(usize);
 
-impl EdgeStorageSlot {
+impl EdgeStorageSlotIndex {
     /// Creates a slot handle for the given slot number.
     fn new(slot_index: usize) -> Self {
-        Self(slot_index * Self::size())
+        Self(slot_index)
     }
 
-    /// Returns the number of array entries per slot (currently 3).
-    pub const fn size() -> usize {
-        NEIGHBORS_SLOT_SIZE
-    }
-
-    /// Returns the array index of the offsets entry for this slot.
-    #[inline]
-    pub fn offset_index(&self) -> usize {
+    pub fn index(&self) -> usize {
         self.0
-    }
-
-    /// Returns the array index of the neighbors entry for this slot.
-    #[inline]
-    pub fn neighbors_index(&self) -> usize {
-        self.0 + 1
-    }
-
-    /// Returns the array index of the edge properties entry for this slot.
-    #[inline]
-    pub fn properties_index(&self) -> usize {
-        self.0 + 2
     }
 }
 
-impl Display for EdgeStorageSlot {
+impl Display for EdgeStorageSlotIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "EdgeStorageSlot({})", self.0)
     }
 }
 
-/// A handle to a group of consecutive entries in the flat property storage array.
-///
-/// Each slot covers [`PropertyStorageSlot::size`] entries: one for offsets and one for values.
+/// An index into the `PropertyStorage` for a given
+/// `(node_kind, property_kind)` combination.
 #[derive(Debug, Clone, Copy)]
-pub struct PropertyStorageSlot(usize);
+pub struct PropertyStorageSlotIndex(usize);
 
-impl PropertyStorageSlot {
+impl PropertyStorageSlotIndex {
     /// Creates a slot handle for the given slot number.
     fn new(slot_index: usize) -> Self {
-        Self(slot_index * Self::size())
+        Self(slot_index)
     }
 
-    /// Returns the number of array entries per slot (currently 2).
-    pub const fn size() -> usize {
-        PROPERTY_SLOT_SIZE
-    }
-
-    /// Returns the array index of the offsets entry for this slot.
-    #[inline]
-    pub fn offset_index(&self) -> usize {
+    pub fn index(&self) -> usize {
         self.0
-    }
-
-    /// Returns the array index of the values entry for this slot.
-    #[inline]
-    pub fn values_index(&self) -> usize {
-        self.0 + 1
     }
 }
 
-impl Display for PropertyStorageSlot {
+impl Display for PropertyStorageSlotIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "PropertyStorageSlot({})", self.0)
     }
@@ -214,14 +175,11 @@ pub trait Schema: Sized + Clone + Copy + Debug {
         node_property_kind.property_type()
     }
 
-    /// Returns the total number of entries in the flat edge storage array.
+    /// Returns the number of slots in the flat edge storage array.
     ///
-    /// Equals `edge_kinds * directions * node_kinds * EdgeStorageSlot::size()`.
+    /// Equals `edge_kinds * directions * node_kinds`.
     fn edge_storage_size() -> usize {
-        Self::number_of_edge_kinds()
-            * Self::number_of_node_kinds()
-            * EdgeStorageSlot::size()
-            * Direction::values().len()
+        Self::number_of_edge_kinds() * Self::number_of_node_kinds() * Direction::values().len()
     }
 
     /// Returns the storage slot for the given `(node_kind, direction, edge_kind)` combination.
@@ -232,8 +190,8 @@ pub trait Schema: Sized + Clone + Copy + Debug {
         node_kind: Self::N,
         direction: Direction,
         edge_kind: Self::E,
-    ) -> EdgeStorageSlot {
-        EdgeStorageSlot::new(
+    ) -> EdgeStorageSlotIndex {
+        EdgeStorageSlotIndex::new(
             node_kind.index()
                 + Self::number_of_node_kinds()
                     * (direction.factor() + Direction::values().len() * edge_kind.index()),
@@ -243,7 +201,7 @@ pub trait Schema: Sized + Clone + Copy + Debug {
     /// Iterates over all `(node_kind, direction, edge_kind)` combinations in flat array order.
     ///
     /// The order matches the layout used by [`Schema::edge_storage_slot`]: edge kind outermost,
-    /// direction in the middle, node kind innermost. Each item corresponds to one [`EdgeStorageSlot`].
+    /// direction in the middle, node kind innermost. Each item corresponds to one
     fn edge_storage_slots_iter() -> impl Iterator<Item = (Self::N, Direction, Self::E)> {
         Self::edge_kinds().iter().flat_map(|&edge_kind| {
             Direction::values().iter().flat_map(move |&direction| {
@@ -254,21 +212,22 @@ pub trait Schema: Sized + Clone + Copy + Debug {
         })
     }
 
-    /// Returns the total number of entries in the flat property storage array.
+    /// Returns the number of slots in the flat property storage array.
     ///
-    /// Equals `node_kinds * property_kinds * PropertyStorageSlot::size()`.
+    /// Equals `node_kinds * property_kinds`.
     fn property_storage_size() -> usize {
-        Self::number_of_node_kinds()
-            * Self::number_of_property_kinds()
-            * PropertyStorageSlot::size()
+        Self::number_of_node_kinds() * Self::number_of_property_kinds()
     }
 
     /// Returns the storage slot for the given `(node_kind, property_kind)` combination.
     ///
     /// The flat array is laid out with property kind as the outermost dimension and node kind
     /// as the innermost.
-    fn property_storage_slot(node_kind: Self::N, property_kind: Self::P) -> PropertyStorageSlot {
-        PropertyStorageSlot::new(
+    fn property_storage_slot(
+        node_kind: Self::N,
+        property_kind: Self::P,
+    ) -> PropertyStorageSlotIndex {
+        PropertyStorageSlotIndex::new(
             node_kind.index() + Self::number_of_node_kinds() * property_kind.index(),
         )
     }
@@ -276,7 +235,7 @@ pub trait Schema: Sized + Clone + Copy + Debug {
     /// Iterates over all `(node_kind, property_kind)` combinations in flat array order.
     ///
     /// The order matches the layout used by [`Schema::property_storage_slot`]: property kind
-    /// outermost, node kind innermost. Each item corresponds to one [`PropertyStorageSlot`].
+    /// outermost, node kind innermost. Each item corresponds to one
     fn property_storage_slots_iter() -> impl Iterator<Item = (Self::N, Self::P)> {
         Self::property_kinds().iter().flat_map(|&property_kind| {
             Self::node_kinds()

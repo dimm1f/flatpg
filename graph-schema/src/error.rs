@@ -10,8 +10,6 @@ pub type Result<T> = result::Result<T, Error>;
 pub enum Error {
     #[error("invalid property type (expected \"{expected}\", found \"{found}\")")]
     InvalidPropertyType { expected: String, found: String },
-    #[error("invalid slot index \"{0}\"")]
-    InvalidSlotIndex(String),
     #[error("property index is not found")]
     PropertyIndexNotFound,
     #[error("property \"{property}\" is not supported for node \"{node_kind_name}\"")]
@@ -29,26 +27,12 @@ pub enum Error {
         end: usize,
         count: usize,
     },
-    #[error("offsets are not found for slot \"{0}\"")]
-    SlotOffsetsNotFound(String),
     #[error("offsets are not found for node.seq \"{0}\"")]
     NodeOffsetNotFound(usize),
     #[error("offset value {0} exceeds the maximum supported offset")]
     OffsetOverflow(usize),
     #[error("offset arithmetic underflowed: CSR offsets must remain non-decreasing")]
     OffsetUnderflow,
-    #[error("node {node} has more \"{edge_kind} {direction}\" edges than EdgeSeq allows")]
-    TooManyEdges {
-        node: String,
-        edge_kind: String,
-        direction: String,
-    },
-    #[error(
-        "neighbors are not found for index: 
-    
-    {0}"
-    )]
-    NeighborNotFound(usize),
     #[error("failed to resolve node kind {0}")]
     UnresolvedNodeKind(usize),
     #[error("failed to resolve edge kind {0}")]
@@ -110,10 +94,6 @@ impl Error {
         }
     }
 
-    pub fn invalid_slot_index(slot: impl Into<String>) -> Self {
-        Self::InvalidSlotIndex(slot.into())
-    }
-
     pub fn property_index_not_found() -> Self {
         Self::PropertyIndexNotFound
     }
@@ -136,10 +116,6 @@ impl Error {
         Self::PropertyIndexOutOfBounds { start, end, count }
     }
 
-    pub fn slot_offsets_not_found(slot: impl Into<String>) -> Self {
-        Self::SlotOffsetsNotFound(slot.into())
-    }
-
     pub fn node_offset_not_found(seq: usize) -> Self {
         Self::NodeOffsetNotFound(seq)
     }
@@ -150,22 +126,6 @@ impl Error {
 
     pub fn offset_underflow() -> Self {
         Self::OffsetUnderflow
-    }
-
-    pub fn too_many_edges(
-        node: impl Into<String>,
-        edge_kind: impl Into<String>,
-        direction: impl Into<String>,
-    ) -> Self {
-        Self::TooManyEdges {
-            node: node.into(),
-            edge_kind: edge_kind.into(),
-            direction: direction.into(),
-        }
-    }
-
-    pub fn neighbor_not_found(index: usize) -> Self {
-        Self::NeighborNotFound(index)
     }
 
     pub fn unresolved_node_kind(kind_index: usize) -> Self {

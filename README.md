@@ -292,11 +292,11 @@ match alpha.key() {
 }
 ```
 
-Variants cover cases like an invalid property type, an unresolved node/edge/enum reference, an out-of-bounds storage slot, or too many edges on a node. Each has a matching constructor function (e.g. `Error::property_not_supported(...)`), which is what the generated accessors and `Graph`/`GraphDiff` methods use internally to build these errors. `error::Result<T>` is simply `Result<T, Error>`.
+Variants cover cases like an invalid property type, an unresolved node/edge/enum reference, a malformed or out-of-bounds offset array, or a missing reverse edge half. Each has a matching constructor function (e.g. `Error::property_not_supported(...)`), which is what the generated accessors and `Graph`/`GraphDiff` methods use internally to build these errors. `error::Result<T>` is simply `Result<T, Error>`.
 
 ### Low-level storage
 
-`storage::StorageArray`, along with the `EdgeStorage<S>`, `PropertyStorage<S>`, and `NodeMetaStorage<S>` wrappers around it, are the columnar arrays `Graph<S>` is actually built from — one array per storage slot, indexed by the offsets `Schema` computes. They're public for introspection, but normal usage goes entirely through `Graph`/`GraphDiff` rather than these directly. [`RawGraph`](#rawgraph) is the sanctioned way to get mutable access to them when you do need it.
+`EdgeStorage<S>` and `PropertyStorage<S>` are each a `Vec` of per-slot structs (`storage::EdgeStorageSlot`, `storage::PropertyStorageSlot`), one slot per `(node_kind, direction, edge_kind)` or `(node_kind, property_kind)` combination, at the index `Schema` computes for it. Each slot bundles its own CSR offsets (`Vec<Offset>`) together with its neighbors (edges) or values (`storage::StorageArray`, a columnar array typed per the schema). `NodeMetaStorage<S>` is a separate wrapper holding per-node metadata. They're public for introspection, but normal usage goes entirely through `Graph`/`GraphDiff` rather than these directly. [`RawGraph`](#rawgraph) is the sanctioned way to get mutable access to them when you do need it.
 
 ## Workspace
 

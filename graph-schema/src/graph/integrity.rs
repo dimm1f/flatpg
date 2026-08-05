@@ -26,7 +26,7 @@ use crate::{
     node::RawNodeId,
     property::PropertyType,
     schema::Schema,
-    storage::{EdgeStorage, NodeMetaStorage, Offset, PropertyStorage, StorageArray},
+    storage::{EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, PropertyStorage, StorageArray},
     strings_pool::{RawStringId, StringsPool},
 };
 
@@ -47,53 +47,50 @@ pub(crate) fn check_integrity<S: Schema>(
     check_storage_sizes::<S>(node_meta_storage, edge_storage, property_storage)?;
 
     for (node_kind, property_kind) in S::property_storage_slots_iter() {
-        let slot = S::property_storage_slot(node_kind, property_kind);
-        let slot_name = slot.to_string();
+        let slot_index = S::property_storage_slot(node_kind, property_kind);
+        let slot_name = slot_index.to_string();
         let expected_count = node_meta_storage[node_kind.index()].len();
         let expected_type = S::node_property_type(property_kind);
 
-        let offsets = property_storage[slot.offset_index()].try_as_offset()?;
-        check_offsets_shape(&slot_name, offsets, expected_count)?;
-
-        let values = &property_storage[slot.values_index()];
-        check_storage_type(values, expected_type)?;
+        let slot = &property_storage[slot_index.index()];
+        check_offsets_shape(&slot_name, slot.offsets(), expected_count)?;
+        check_storage_type(slot.values(), expected_type)?;
         if expected_type != PropertyType::None {
-            check_offsets_bounds(&slot_name, offsets, values.len())?;
+            check_offsets_bounds(&slot_name, slot.offsets(), slot.values().len())?;
         }
 
-        check_values_content::<S>(values, node_meta_storage, strings)?;
+        check_values_content::<S>(slot.values(), node_meta_storage, strings)?;
     }
 
     let mut half_edge_counts: HashMap<(RawNodeId, Direction, usize, RawNodeId), usize> =
         HashMap::new();
 
     for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
-        let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
-        let slot_name = slot.to_string();
+        let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind);
+        let slot_name = slot_index.to_string();
         let expected_count = node_meta_storage[node_kind.index()].len();
 
-        let offsets = edge_storage[slot.offset_index()].try_as_offset()?;
-        check_offsets_shape(&slot_name, offsets, expected_count)?;
+        let slot = &edge_storage[slot_index.index()];
+        check_offsets_shape(&slot_name, slot.offsets(), expected_count)?;
 
-        let neighbors_arr = &edge_storage[slot.neighbors_index()];
-        check_storage_type(neighbors_arr, PropertyType::NodeId)?;
-        check_offsets_bounds(&slot_name, offsets, neighbors_arr.len())?;
-        check_values_content::<S>(neighbors_arr, node_meta_storage, strings)?;
-        let neighbors = neighbors_arr.try_as_node_id()?;
-
-        let properties_arr = &edge_storage[slot.properties_index()];
-        let expected_prop_type = S::edge_property_type(edge_kind);
-        check_storage_type(properties_arr, expected_prop_type)?;
-        if expected_prop_type != PropertyType::None {
-            check_offsets_bounds(&slot_name, offsets, properties_arr.len())?;
+        check_offsets_bounds(&slot_name, slot.offsets(), slot.neighbors().len())?;
+        for node_id in slot.neighbors() {
+            check_node_id::<S>(*node_id, node_meta_storage)?;
         }
-        check_values_content::<S>(properties_arr, node_meta_storage, strings)?;
+
+        let expected_prop_type = S::edge_property_type(edge_kind);
+        check_storage_type(slot.values(), expected_prop_type)?;
+        if expected_prop_type != PropertyType::None {
+            check_offsets_bounds(&slot_name, slot.offsets(), slot.values().len())?;
+        }
+        check_values_content::<S>(slot.values(), node_meta_storage, strings)?;
 
         for seq in 0..expected_count {
-            let start = offsets.get(seq).unwrap_or(&Offset::zero()).value();
-            let end = offsets.get(seq + 1).unwrap_or(&Offset::zero()).value();
+            let (start, end) = slot
+                .get_offset(seq)
+                .unwrap_or((Offset::zero(), Offset::zero()));
             let node = RawNodeId::new(node_kind.index(), seq);
-            for &neighbor in &neighbors[start..end] {
+            for neighbor in slot.get_neighbors(start, end) {
                 *half_edge_counts
                     .entry((node, direction, edge_kind.index(), neighbor))
                     .or_insert(0) += 1;
@@ -357,16 +354,6 @@ mod tests {
     fn storage_type_rejects_mismatch() {
         let err =
             check_storage_type(&StorageArray::Int(vec![7]), PropertyType::String).unwrap_err();
-        assert!(matches!(err, Error::InvalidPropertyType { .. }));
-    }
-
-    #[test]
-    fn storage_type_distinguishes_offset_from_none() {
-        // Regression test for the case described in check_storage_type's doc comment: an Offset
-        // array and a real, empty None-typed slot both report PropertyType::None from `.typ()`.
-        // This test makes sure they are NOT treated as a match.
-        let err =
-            check_storage_type(&StorageArray::Offset(vec![]), PropertyType::None).unwrap_err();
         assert!(matches!(err, Error::InvalidPropertyType { .. }));
     }
 

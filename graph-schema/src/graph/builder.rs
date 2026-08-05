@@ -8,7 +8,7 @@ use crate::{
     node::{NewNode, NodeId, NodeMeta, RawNodeId},
     property::{PropertyType, PropertyValue},
     schema::{EdgeKind, PropKind, Schema},
-    storage::{NodeMetaStorage, Offset, StorageArray, StoredProperty},
+    storage::{NodeMetaStorage, Offset, OffsetStorage, StorageArray, StoredProperty},
     strings_pool::StringsPool,
 };
 
@@ -231,45 +231,39 @@ impl<S: Schema> GraphDiff<S> {
                 continue;
             }
 
-            let slot = S::property_storage_slot(node_kind, property_kind);
-
-            // Safety: graph.property_storage has property_storage_size() slots; slot guarantees both indices are in-bounds and distinct.
-            let [offsets, storage] = unsafe {
-                graph
-                    .property_storage
-                    .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
-            };
-            let offsets = offsets.try_as_offset_mut()?;
+            let slot_index = S::property_storage_slot(node_kind, property_kind).index();
+            let slot = &mut graph.property_storage[slot_index];
 
             let seq_property = slot_property
                 .get(&(node_kind, property_kind))
                 .filter(|m| !m.is_empty());
 
             let Some(seq_property) = seq_property else {
-                if !offsets.is_empty() {
-                    let last = offsets.last().copied().unwrap_or_else(Offset::zero);
-                    offsets.resize(offsets.len() + nodes_count, last);
+                if !slot.offsets().is_empty() {
+                    let new_len = slot.offsets().len() + nodes_count;
+                    let last = slot.offsets().last().copied().unwrap_or_else(Offset::zero);
+                    slot.offsets_mut().resize(new_len, last);
                 }
                 continue;
             };
 
-            if offsets.is_empty() {
+            if slot.offsets().is_empty() {
                 let existing = graph_nodes_max_seq[node_kind.index()];
-                offsets.resize(existing + 1, Offset::zero());
+                slot.offsets_mut().resize(existing + 1, Offset::zero());
             }
 
-            let mut cumulative = offsets.last().copied().unwrap_or_else(Offset::zero);
+            let mut cumulative = slot.offsets().last().copied().unwrap_or_else(Offset::zero);
             for local_index in 0..nodes_count {
                 if let Some(props) = seq_property.get(&local_index) {
-                    let mut batch = StorageArray::with_capacity(storage.typ(), props.len());
+                    let mut batch = StorageArray::with_capacity(slot.values().typ(), props.len());
                     for prop in props.iter() {
                         let prop = to_stored_property(prop, &mut graph.strings);
                         batch.try_push(&prop)?;
                     }
                     cumulative = cumulative.checked_add_delta(props.len())?;
-                    storage.try_append(&mut batch)?;
+                    slot.values_mut().try_append(&mut batch)?;
                 }
-                offsets.push(cumulative);
+                slot.offsets_mut().push(cumulative);
             }
         }
 
@@ -278,13 +272,14 @@ impl<S: Schema> GraphDiff<S> {
             if nodes_count == 0 {
                 continue;
             }
-            let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
-            let offsets = graph.edge_storage[slot.offset_index()].try_as_offset_mut()?;
-            if offsets.is_empty() {
+            let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind).index();
+            let slot = &mut graph.edge_storage[slot_index];
+            if slot.offsets().is_empty() {
                 continue;
             }
-            let last = offsets.last().copied().unwrap_or_else(Offset::zero);
-            offsets.resize(offsets.len() + nodes_count, last);
+            let new_len = slot.offsets().len() + nodes_count;
+            let last = slot.offsets().last().copied().unwrap_or_else(Offset::zero);
+            slot.offsets_mut().resize(new_len, last);
         }
 
         let resolve_node_ref = |node: &NewOrExistingNode| -> Option<RawNodeId> {
@@ -324,28 +319,16 @@ impl<S: Schema> GraphDiff<S> {
             });
 
         for ((node_kind, direction, edge_kind), seq_halves) in slot_edge_halves {
-            let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
-
-            // Safety: graph.edge_storage covers all schema edge slots (including new nodes appended above); slot guarantees all
-            // three indices are in-bounds and pairwise distinct.
-            let [offsets, neigbors, properties] = unsafe {
-                graph.edge_storage.get_disjoint_unchecked_mut([
-                    slot.offset_index(),
-                    slot.neighbors_index(),
-                    slot.properties_index(),
-                ])
-            };
-
-            let offsets = offsets.try_as_offset_mut()?;
-            let neigbors = neigbors.try_as_node_id_mut()?;
+            let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind).index();
+            let slot = &mut graph.edge_storage[slot_index];
 
             if !seq_halves.is_empty() {
                 let offsets_len = graph.node_meta_storage[node_kind.index()].len() + 1;
-                if offsets.is_empty() {
-                    *offsets = vec![Offset::zero(); offsets_len];
-                } else if offsets.len() != offsets_len {
-                    let last = offsets.last().cloned().unwrap_or_else(Offset::zero);
-                    offsets.resize(offsets_len, last);
+                if slot.offsets().is_empty() {
+                    *slot.offsets_mut() = vec![Offset::zero(); offsets_len];
+                } else if slot.offsets().len() != offsets_len {
+                    let last = slot.offsets().last().cloned().unwrap_or_else(Offset::zero);
+                    slot.offsets_mut().resize(offsets_len, last);
                 }
             } else {
                 continue;
@@ -354,28 +337,29 @@ impl<S: Schema> GraphDiff<S> {
             let mut delta = 0;
 
             #[allow(clippy::needless_range_loop)]
-            for end in 1..offsets.len() {
+            for end in 1..slot.offsets().len() {
                 let start = end - 1;
 
                 if let Some(halves) = seq_halves.get(&start) {
                     let new_neighbors = halves.iter().map(|h| RawNodeId::from(&h.neighbor));
 
-                    let place = offsets[end].value() + delta;
-                    neigbors.splice(place..place, new_neighbors);
+                    let place = slot.offsets()[end].value() + delta;
+                    slot.neighbors_mut().splice(place..place, new_neighbors);
                     delta += halves.len();
 
-                    if properties.typ() != PropertyType::None {
-                        let mut batch = StorageArray::with_capacity(properties.typ(), halves.len());
+                    let property_type = slot.values().typ();
+                    if property_type != PropertyType::None {
+                        let mut batch = StorageArray::with_capacity(property_type, halves.len());
                         for half in halves.iter() {
                             if let Some(prop) = &half.property {
                                 batch.try_push(prop)?;
                             }
                         }
-                        properties.try_splice(place, batch)?;
+                        slot.values_mut().try_splice(place, batch)?;
                     }
                 }
 
-                offsets[end] = offsets[end].checked_add_delta(delta)?;
+                slot.offsets_mut()[end] = slot.offsets()[end].checked_add_delta(delta)?;
             }
         }
 
@@ -395,7 +379,8 @@ impl<S: Schema> GraphDiff<S> {
                 }
                 Change::UpdateNodeProperty(node_ref, property_kind, quantified_property) => {
                     let node: NodeId<S> = (*node_ref).try_into()?;
-                    let slot = S::property_storage_slot(node.kind(), *property_kind);
+                    let slot_index = S::property_storage_slot(node.kind(), *property_kind).index();
+                    let slot = &mut graph.property_storage[slot_index];
 
                     let new_values: &[PropertyValue] = match quantified_property {
                         QuantifiedProperty::One(p) => std::slice::from_ref(p),
@@ -409,30 +394,23 @@ impl<S: Schema> GraphDiff<S> {
                         .map(|prop| to_stored_property(prop, &mut graph.strings))
                         .collect();
 
-                    // Safety: graph.property_storage covers all schema property slots; slot guarantees both indices are in-bounds and distinct.
-                    let [offsets_arr, values_arr] = unsafe {
-                        graph
-                            .property_storage
-                            .get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
+                    let Some((start, end)) = slot.get_offset(node_ref.seq()) else {
+                        return Err(Error::node_offset_not_found(node_ref.seq()));
                     };
-
-                    let offsets = offsets_arr.try_as_offset_mut()?;
-                    let start = offsets[node_ref.seq()];
-                    let end = offsets[node_ref.seq() + 1];
                     let old_count = end.checked_sub(start)?;
                     let new_count = stored_values.len();
 
-                    values_arr.try_drain(start.value()..end.value())?;
+                    slot.values_mut().try_drain(start.value()..end.value())?;
                     for (i, prop) in stored_values.iter().enumerate() {
-                        values_arr.try_insert(start.value() + i, prop)?;
+                        slot.values_mut().try_insert(start.value() + i, prop)?;
                     }
 
                     #[allow(clippy::needless_range_loop)]
-                    for i in (node_ref.seq() + 1)..offsets.len() {
-                        offsets[i] = if new_count >= old_count {
-                            offsets[i].checked_add_delta(new_count - old_count)?
+                    for i in (node_ref.seq() + 1)..slot.offsets().len() {
+                        slot.offsets_mut()[i] = if new_count >= old_count {
+                            slot.offsets()[i].checked_add_delta(new_count - old_count)?
                         } else {
-                            offsets[i].checked_sub_delta(old_count - new_count)?
+                            slot.offsets()[i].checked_sub_delta(old_count - new_count)?
                         };
                     }
                 }
@@ -469,28 +447,20 @@ where
     S: Schema,
 {
     let node_kind = S::resolve_node_kind(node_ref)?;
-    let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
+    let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind).index();
+    let slot = &mut graph.edge_storage[slot_index];
 
-    // Safety: graph.edge_storage covers all schema edge slots; slot guarantees all three indices are in-bounds
-    // and pairwise distinct. local_seq is within the node's adjacency range as validated by the caller.
-    let [offsets_arr, neighbors_arr, properties_arr] = unsafe {
-        graph.edge_storage.get_disjoint_unchecked_mut([
-            slot.offset_index(),
-            slot.neighbors_index(),
-            slot.properties_index(),
-        ])
+    let Some((start, _)) = slot.get_offset(node_ref.seq()) else {
+        return Err(Error::node_offset_not_found(node_ref.seq()));
     };
+    let idx = start.checked_add_delta(local_seq)?;
 
-    let offsets = offsets_arr.try_as_offset_mut()?;
-    let start = offsets[node_ref.seq()].value();
-    let idx = start + local_seq;
-
-    neighbors_arr.try_drain(idx..idx + 1)?;
-    properties_arr.try_drain(idx..idx + 1)?;
+    slot.neighbors_mut().drain(idx.value()..idx.value() + 1);
+    slot.values_mut().try_drain(idx.value()..idx.value() + 1)?;
 
     #[allow(clippy::needless_range_loop)]
-    for i in (node_ref.seq() + 1)..offsets.len() {
-        offsets[i] = offsets[i].checked_sub_delta(1)?;
+    for i in (node_ref.seq() + 1)..slot.offsets().len() {
+        slot.offsets_mut()[i] = slot.offsets()[i].checked_sub_delta(1)?;
     }
 
     Ok(())
@@ -507,26 +477,15 @@ where
     S: Schema,
 {
     let node: NodeId<S> = node.try_into()?;
-    let slot = S::edge_storage_slot(node.kind(), direction, edge_kind);
+    let slot_index = S::edge_storage_slot(node.kind(), direction, edge_kind).index();
+    let slot = &graph.edge_storage[slot_index];
 
-    let offsets = graph
-        .edge_storage
-        .get(slot.offset_index())
-        .ok_or_else(|| Error::invalid_slot_index(slot.to_string()))?
-        .try_as_offset()?;
+    let Some((start, end)) = slot.get_offset(node.seq()) else {
+        return Err(Error::node_offset_not_found(node.seq()));
+    };
 
-    let start = offsets[node.seq()].value();
-    let end = offsets[node.seq() + 1].value();
-
-    let neighbors = graph
-        .edge_storage
-        .get(slot.neighbors_index())
-        .ok_or_else(|| Error::neighbor_not_found(slot.neighbors_index()))?
-        .try_as_node_id()?;
-
-    neighbors[start..end]
-        .iter()
-        .position(|&n| n == target)
+    slot.get_neighbors(start, end)
+        .position(|n| n == target)
         .ok_or_else(|| match target.try_into() {
             Ok::<NodeId<S>, _>(target) => Error::reverse_edge_not_found(
                 target.to_string(),

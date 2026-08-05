@@ -45,7 +45,7 @@ impl StoredProperty {
 
 type InnerOffset = u32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Offset(InnerOffset);
 
 impl Offset {
@@ -55,10 +55,12 @@ impl Offset {
             .map_err(|_| Error::offset_overflow(value))
     }
 
+    #[inline]
     pub fn zero() -> Self {
         Self(0)
     }
 
+    #[inline]
     pub fn value(&self) -> usize {
         self.0 as usize
     }
@@ -90,13 +92,18 @@ impl Offset {
     }
 }
 
+impl From<&Offset> for usize {
+    fn from(value: &Offset) -> Self {
+        value.value()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum StorageArray {
     Bool(Vec<bool>),
     Byte(Vec<u8>),
     Short(Vec<i16>),
     Int(Vec<i32>),
-    Offset(Vec<Offset>),
     Long(Vec<i64>),
     Float(Vec<f32>),
     Double(Vec<f64>),
@@ -124,13 +131,6 @@ impl StorageArray {
         }
     }
 
-    // TODO: Offsets should be stored separately with properties.
-    // This can be implemented by defining slots in EgdeStorage
-    // and PropertyStorage as Struct of Arrays.
-    pub fn new_offsets() -> Self {
-        Self::Offset(Vec::new())
-    }
-
     pub fn with_capacity(typ: PropertyType, capacity: usize) -> Self {
         match typ {
             PropertyType::None => Self::None,
@@ -153,7 +153,6 @@ impl StorageArray {
             StorageArray::Byte(_) => PropertyType::Byte,
             StorageArray::Short(_) => PropertyType::Short,
             StorageArray::Int(_) => PropertyType::Int,
-            StorageArray::Offset(_) => PropertyType::None,
             StorageArray::Long(_) => PropertyType::Long,
             StorageArray::Float(_) => PropertyType::Float,
             StorageArray::Double(_) => PropertyType::Double,
@@ -170,7 +169,6 @@ impl StorageArray {
             StorageArray::Byte(v) => v.get(index).copied().map(StoredProperty::Byte),
             StorageArray::Short(v) => v.get(index).copied().map(StoredProperty::Short),
             StorageArray::Int(v) => v.get(index).copied().map(StoredProperty::Int),
-            StorageArray::Offset(_) => None,
             StorageArray::Long(v) => v.get(index).copied().map(StoredProperty::Long),
             StorageArray::Float(v) => v.get(index).copied().map(StoredProperty::Float),
             StorageArray::Double(v) => v.get(index).copied().map(StoredProperty::Double),
@@ -187,7 +185,6 @@ impl StorageArray {
             StorageArray::Byte(v) => StorageArrayIter::Byte(v.get(range).unwrap_or(&[]).iter()),
             StorageArray::Short(v) => StorageArrayIter::Short(v.get(range).unwrap_or(&[]).iter()),
             StorageArray::Int(v) => StorageArrayIter::Int(v.get(range).unwrap_or(&[]).iter()),
-            StorageArray::Offset(_) => StorageArrayIter::Empty,
             StorageArray::Long(v) => StorageArrayIter::Long(v.get(range).unwrap_or(&[]).iter()),
             StorageArray::Float(v) => StorageArrayIter::Float(v.get(range).unwrap_or(&[]).iter()),
             StorageArray::Double(v) => StorageArrayIter::Double(v.get(range).unwrap_or(&[]).iter()),
@@ -311,9 +308,6 @@ impl StorageArray {
             StorageArray::Int(v) => {
                 v.drain(range);
             }
-            StorageArray::Offset(v) => {
-                v.drain(range);
-            }
             StorageArray::Long(v) => {
                 v.drain(range);
             }
@@ -343,7 +337,6 @@ impl StorageArray {
             StorageArray::Byte(items) => items.len(),
             StorageArray::Short(items) => items.len(),
             StorageArray::Int(items) => items.len(),
-            StorageArray::Offset(items) => items.len(),
             StorageArray::Long(items) => items.len(),
             StorageArray::Float(items) => items.len(),
             StorageArray::Double(items) => items.len(),
@@ -411,20 +404,6 @@ impl StorageArray {
         match self {
             Self::Int(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::Int)),
-        }
-    }
-
-    pub fn try_as_offset(&self) -> Result<&Vec<Offset>, Error> {
-        match self {
-            Self::Offset(items) => Ok(items),
-            _ => Err(self.casting_error(PropertyType::None)),
-        }
-    }
-
-    pub fn try_as_offset_mut(&mut self) -> Result<&mut Vec<Offset>, Error> {
-        match self {
-            Self::Offset(items) => Ok(items),
-            _ => Err(self.casting_error(PropertyType::None)),
         }
     }
 
@@ -537,13 +516,6 @@ impl StorageArray {
         match self {
             Self::Int(items) => Ok(items),
             _ => Err(self.casting_error(PropertyType::Int)),
-        }
-    }
-
-    pub fn try_into_offset(self) -> Result<Vec<Offset>, Error> {
-        match self {
-            Self::Offset(items) => Ok(items),
-            _ => Err(self.casting_error(PropertyType::None)),
         }
     }
 
@@ -662,29 +634,77 @@ impl<S> DerefMut for NodeMetaStorage<S> {
     }
 }
 
+pub trait OffsetStorage {
+    fn offsets(&self) -> &Vec<Offset>;
+    fn offsets_mut(&mut self) -> &mut Vec<Offset>;
+    fn get_offset(&self, index: usize) -> Option<(Offset, Offset)> {
+        match self.offsets().get(index..=(index + 1)) {
+            Some([start, end]) => Some((*start, *end)),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct EdgeStorageSlot {
+    offsets: Vec<Offset>,
+    neighbors: Vec<RawNodeId>,
+    values: StorageArray,
+}
+
+impl EdgeStorageSlot {
+    pub fn get_neighbors(&self, start: Offset, end: Offset) -> impl Iterator<Item = RawNodeId> {
+        self.neighbors
+            .get(start.value()..end.value())
+            .unwrap_or(&[])
+            .iter()
+            .copied()
+    }
+
+    pub fn neighbors(&self) -> &Vec<RawNodeId> {
+        &self.neighbors
+    }
+
+    pub fn neighbors_mut(&mut self) -> &mut Vec<RawNodeId> {
+        &mut self.neighbors
+    }
+
+    pub fn get_value(&self, index: Offset) -> Option<StoredProperty> {
+        self.values.get(index.value())
+    }
+
+    pub fn values(&self) -> &StorageArray {
+        &self.values
+    }
+
+    pub fn values_mut(&mut self) -> &mut StorageArray {
+        &mut self.values
+    }
+}
+
+impl OffsetStorage for EdgeStorageSlot {
+    fn offsets(&self) -> &Vec<Offset> {
+        &self.offsets
+    }
+
+    fn offsets_mut(&mut self) -> &mut Vec<Offset> {
+        &mut self.offsets
+    }
+}
 pub struct EdgeStorage<S> {
-    storage: Vec<StorageArray>,
+    storage: Vec<EdgeStorageSlot>,
     _phantom: PhantomData<S>,
 }
 
 impl<S: Schema> EdgeStorage<S> {
     pub fn new() -> Self {
-        let mut storage = vec![StorageArray::default(); S::edge_storage_size()];
+        let mut storage = vec![EdgeStorageSlot::default(); S::edge_storage_size()];
 
         for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
-            let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
+            let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind);
+            let slot = &mut storage[slot_index.index()];
 
-            // Safety: storage has edge_storage_size() slots; slot guarantees all three indices are in-bounds and pairwise distinct.
-            let [offsets, neighbors, properties] = unsafe {
-                storage.get_disjoint_unchecked_mut([
-                    slot.offset_index(),
-                    slot.neighbors_index(),
-                    slot.properties_index(),
-                ])
-            };
-            *offsets = StorageArray::new_offsets();
-            *neighbors = StorageArray::new(PropertyType::NodeId);
-            *properties = StorageArray::new(S::edge_property_type(edge_kind));
+            slot.values = StorageArray::new(S::edge_property_type(edge_kind));
         }
         Self {
             storage,
@@ -700,7 +720,7 @@ impl<S: Schema> Default for EdgeStorage<S> {
 }
 
 impl<S> Deref for EdgeStorage<S> {
-    type Target = Vec<StorageArray>;
+    type Target = Vec<EdgeStorageSlot>;
 
     fn deref(&self) -> &Self::Target {
         &self.storage
@@ -714,33 +734,59 @@ impl<S> DerefMut for EdgeStorage<S> {
 }
 
 impl<'a, S> IntoIterator for &'a EdgeStorage<S> {
-    type Item = &'a StorageArray;
+    type Item = &'a EdgeStorageSlot;
 
-    type IntoIter = std::slice::Iter<'a, StorageArray>;
+    type IntoIter = std::slice::Iter<'a, EdgeStorageSlot>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.storage.iter()
     }
 }
 
+#[derive(Default, Clone)]
+pub struct PropertyStorageSlot {
+    offsets: Vec<Offset>,
+    values: StorageArray,
+}
+
+impl PropertyStorageSlot {
+    pub fn get_values(&self, start: Offset, end: Offset) -> StorageArrayIter<'_> {
+        self.values.iter_range(start.value()..end.value())
+    }
+
+    pub fn values(&self) -> &StorageArray {
+        &self.values
+    }
+
+    pub fn values_mut(&mut self) -> &mut StorageArray {
+        &mut self.values
+    }
+}
+
+impl OffsetStorage for PropertyStorageSlot {
+    fn offsets(&self) -> &Vec<Offset> {
+        &self.offsets
+    }
+
+    fn offsets_mut(&mut self) -> &mut Vec<Offset> {
+        &mut self.offsets
+    }
+}
+
 pub struct PropertyStorage<S> {
-    storage: Vec<StorageArray>,
+    storage: Vec<PropertyStorageSlot>,
     _phantom: PhantomData<S>,
 }
 
 impl<S: Schema> PropertyStorage<S> {
     pub fn new() -> Self {
-        let mut storage = vec![StorageArray::default(); S::property_storage_size()];
+        let mut storage = vec![PropertyStorageSlot::default(); S::property_storage_size()];
 
         for (node_kind, property_kind) in S::property_storage_slots_iter() {
-            let slot = S::property_storage_slot(node_kind, property_kind);
+            let slot_index = S::property_storage_slot(node_kind, property_kind);
+            let slot = &mut storage[slot_index.index()];
 
-            // Safety: storage has property_storage_size() slots; slot guarantees both indices are in-bounds and distinct.
-            let [offsets, values] = unsafe {
-                storage.get_disjoint_unchecked_mut([slot.offset_index(), slot.values_index()])
-            };
-            *offsets = StorageArray::new_offsets();
-            *values = StorageArray::new(S::node_property_type(property_kind));
+            slot.values = StorageArray::new(S::node_property_type(property_kind));
         }
         Self {
             storage,
@@ -756,7 +802,7 @@ impl<S: Schema> Default for PropertyStorage<S> {
 }
 
 impl<S> Deref for PropertyStorage<S> {
-    type Target = Vec<StorageArray>;
+    type Target = Vec<PropertyStorageSlot>;
 
     fn deref(&self) -> &Self::Target {
         &self.storage
@@ -770,9 +816,9 @@ impl<S> DerefMut for PropertyStorage<S> {
 }
 
 impl<'a, S> IntoIterator for &'a PropertyStorage<S> {
-    type Item = &'a StorageArray;
+    type Item = &'a PropertyStorageSlot;
 
-    type IntoIter = std::slice::Iter<'a, StorageArray>;
+    type IntoIter = std::slice::Iter<'a, PropertyStorageSlot>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.storage.iter()

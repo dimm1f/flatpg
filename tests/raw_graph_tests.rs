@@ -5,7 +5,7 @@ use flatpg::{
     prelude::*,
     property::PropertyValue,
     schema::Schema,
-    storage::{Offset, StorageArray},
+    storage::{Offset, OffsetStorage, StorageArray},
     strings_pool::RawStringId,
 };
 
@@ -77,41 +77,31 @@ fn shrink_node_count<S: Schema>(raw: &mut RawGraph<S>, kind: S::N) {
         if node_kind != kind {
             continue;
         }
-        let slot = S::property_storage_slot(node_kind, property_kind);
-        let offsets = raw.property_storage[slot.offset_index()]
-            .try_as_offset_mut()
-            .unwrap();
-        if offsets.is_empty() {
+        let slot_index = S::property_storage_slot(node_kind, property_kind).index();
+        let slot = &mut raw.property_storage[slot_index];
+        if slot.offsets().is_empty() {
             continue;
         }
-        let removed_end = offsets.pop().unwrap();
-        let new_end = *offsets.last().unwrap();
+        let removed_end = slot.offsets_mut().pop().unwrap();
+        let new_end = *slot.offsets().last().unwrap();
         let range = new_end.value()..removed_end.value();
-        raw.property_storage[slot.values_index()]
-            .try_drain(range)
-            .unwrap();
+        slot.values_mut().try_drain(range).unwrap();
     }
 
     for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
         if node_kind != kind {
             continue;
         }
-        let slot = S::edge_storage_slot(node_kind, direction, edge_kind);
-        let offsets = raw.edge_storage[slot.offset_index()]
-            .try_as_offset_mut()
-            .unwrap();
-        if offsets.is_empty() {
+        let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind).index();
+        let slot = &mut raw.edge_storage[slot_index];
+        if slot.offsets().is_empty() {
             continue;
         }
-        let removed_end = offsets.pop().unwrap();
-        let new_end = *offsets.last().unwrap();
+        let removed_end = slot.offsets_mut().pop().unwrap();
+        let new_end = *slot.offsets().last().unwrap();
         let range = new_end.value()..removed_end.value();
-        raw.edge_storage[slot.neighbors_index()]
-            .try_drain(range.clone())
-            .unwrap();
-        raw.edge_storage[slot.properties_index()]
-            .try_drain(range)
-            .unwrap();
+        slot.neighbors_mut().drain(range.clone());
+        slot.values_mut().try_drain(range).unwrap();
     }
 }
 
@@ -219,11 +209,9 @@ fn storage_size_mismatch_is_rejected() {
 #[test]
 fn non_monotonic_offsets_are_rejected() {
     let mut raw: RawGraph<TestSchema> = build_two_alpha_values_graph().into();
-    let slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values);
-    raw.property_storage[slot.offset_index()]
-        .try_as_offset_mut()
-        .unwrap()
-        .swap(1, 2);
+    let slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values).index();
+    raw.property_storage[slot_index].offsets_mut().swap(1, 2);
 
     let err = Graph::<TestSchema>::try_from(raw)
         .err()
@@ -234,11 +222,9 @@ fn non_monotonic_offsets_are_rejected() {
 #[test]
 fn offsets_length_mismatch_is_rejected() {
     let mut raw: RawGraph<TestSchema> = build_two_alpha_values_graph().into();
-    let slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values);
-    raw.property_storage[slot.offset_index()]
-        .try_as_offset_mut()
-        .unwrap()
-        .pop();
+    let slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values).index();
+    raw.property_storage[slot_index].offsets_mut().pop();
 
     let err = Graph::<TestSchema>::try_from(raw)
         .err()
@@ -249,11 +235,9 @@ fn offsets_length_mismatch_is_rejected() {
 #[test]
 fn offsets_not_starting_at_zero_are_rejected() {
     let mut raw: RawGraph<TestSchema> = build_two_alpha_values_graph().into();
-    let slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values);
-    raw.property_storage[slot.offset_index()]
-        .try_as_offset_mut()
-        .unwrap()
-        .swap(0, 2);
+    let slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values).index();
+    raw.property_storage[slot_index].offsets_mut().swap(0, 2);
 
     let err = Graph::<TestSchema>::try_from(raw)
         .err()
@@ -264,8 +248,10 @@ fn offsets_not_starting_at_zero_are_rejected() {
 #[test]
 fn offsets_end_not_matching_values_length_is_rejected() {
     let mut raw: RawGraph<TestSchema> = build_two_alpha_values_graph().into();
-    let slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values);
-    raw.property_storage[slot.values_index()]
+    let slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values).index();
+    raw.property_storage[slot_index]
+        .values_mut()
         .try_as_string_mut()
         .unwrap()
         .pop();
@@ -291,8 +277,8 @@ fn storage_type_mismatch_is_rejected() {
         .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
-    let slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Key);
-    raw.property_storage[slot.values_index()] = StorageArray::Int(vec![7]);
+    let slot_index = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Key).index();
+    *raw.property_storage[slot_index].values_mut() = StorageArray::Int(vec![7]);
 
     let err = Graph::<TestSchema>::try_from(raw)
         .err()
@@ -341,8 +327,10 @@ fn foreign_string_id_is_rejected() {
         .check_integrity()
         .expect("graph passes integrity check");
     let raw_a: RawGraph<TestSchema> = graph_a.into();
-    let values_slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values);
-    let foreign_id: RawStringId = raw_a.property_storage[values_slot.values_index()]
+    let values_slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Values).index();
+    let foreign_id: RawStringId = raw_a.property_storage[values_slot_index]
+        .values()
         .try_as_string()
         .unwrap()[1];
 
@@ -358,8 +346,10 @@ fn foreign_string_id_is_rejected() {
         .check_integrity()
         .expect("graph passes integrity check");
     let mut raw_b: RawGraph<TestSchema> = graph_b.into();
-    let key_slot = TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Key);
-    raw_b.property_storage[key_slot.values_index()]
+    let key_slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::Key).index();
+    raw_b.property_storage[key_slot_index]
+        .values_mut()
         .try_as_string_mut()
         .unwrap()[0] = foreign_id;
 
@@ -381,17 +371,14 @@ fn unpaired_half_edge_is_rejected() {
         .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
-    let in_plain = TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Plain);
+    let in_plain_index =
+        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Plain).index();
+    let slot = &mut raw.edge_storage[in_plain_index];
 
-    let offsets = raw.edge_storage[in_plain.offset_index()]
-        .try_as_offset_mut()
-        .unwrap();
+    let offsets = slot.offsets_mut();
     let last = offsets.len() - 1;
     offsets[last] = Offset::zero();
-    raw.edge_storage[in_plain.neighbors_index()]
-        .try_as_node_id_mut()
-        .unwrap()
-        .clear();
+    slot.neighbors_mut().clear();
 
     let err = Graph::<TestSchema>::try_from(raw)
         .err()
@@ -422,23 +409,17 @@ fn parallel_edge_degree_mismatch_is_rejected() {
         .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
-    let alpha_out_labeled =
-        TestSchema::edge_storage_slot(TestNode::Alpha, Direction::Out, TestEdge::Labeled);
-    let beta_in_plain =
-        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Plain);
+    let alpha_out_labeled_index =
+        TestSchema::edge_storage_slot(TestNode::Alpha, Direction::Out, TestEdge::Labeled).index();
+    let beta_in_plain_index =
+        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Plain).index();
 
-    let one = raw.edge_storage[alpha_out_labeled.offset_index()]
-        .try_as_offset()
-        .unwrap()[1];
-    let offsets = raw.edge_storage[beta_in_plain.offset_index()]
-        .try_as_offset_mut()
-        .unwrap();
+    let one = raw.edge_storage[alpha_out_labeled_index].offsets()[1];
+    let slot = &mut raw.edge_storage[beta_in_plain_index];
+    let offsets = slot.offsets_mut();
     let last = offsets.len() - 1;
     offsets[last] = one;
-    raw.edge_storage[beta_in_plain.neighbors_index()]
-        .try_as_node_id_mut()
-        .unwrap()
-        .pop();
+    slot.neighbors_mut().pop();
 
     let err = Graph::<TestSchema>::try_from(raw)
         .err()
