@@ -124,7 +124,7 @@ fn edge_property_is_visible_from_both_endpoints() {
         TestEdge::Labeled,
         Some(PropertyValue::String("p0".into())),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -170,7 +170,7 @@ fn stored_edge_struct_and_edge_enum_match_graph_get_edges() {
         TestEdge::Labeled,
         Some(PropertyValue::String("p0".into())),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -237,7 +237,7 @@ fn in_edge_properties_match_their_edges() {
         TestEdge::Labeled,
         Some(PropertyValue::String("p1".into())),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -281,7 +281,7 @@ fn stored_node_edge_accessors_return_incident_edges() {
         TestEdge::Labeled,
         Some(PropertyValue::String("p1".into())),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -357,7 +357,7 @@ fn add_single_node_to_empty_graph() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -378,7 +378,7 @@ fn add_node_with_enum_property_round_trips() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -403,7 +403,7 @@ fn add_multiple_nodes_same_kind_preserves_order() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -429,7 +429,7 @@ fn add_nodes_of_different_kinds() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -445,7 +445,7 @@ fn add_node_without_properties() {
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.add_node(builders::AlphaNodeBuilder::new().build());
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -462,7 +462,7 @@ fn apply_incremental_to_existing_graph() {
             .unwrap()
             .build(),
     );
-    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    let (graph, _) = diff1.apply(Graph::new()).expect("apply diff 1");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -475,7 +475,7 @@ fn apply_incremental_to_existing_graph() {
             .unwrap()
             .build(),
     );
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -506,7 +506,7 @@ fn apply_accepts_any_graph_view_implementor() {
             .unwrap()
             .build(),
     );
-    let graph = diff
+    let (graph, _) = diff
         .apply(TestGraphWrapper(Graph::new()))
         .expect("apply via GraphView wrapper");
     graph
@@ -528,7 +528,7 @@ fn add_node_with_multi_valued_property_stores_all_values() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -558,7 +558,7 @@ fn multi_valued_property_offsets_are_correct_across_nodes() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -575,7 +575,7 @@ fn multi_valued_property_offsets_are_correct_across_nodes() {
 fn add_node_without_property_then_node_with_property() {
     let mut diff1 = GraphDiff::<TestSchema>::default();
     diff1.add_node(builders::AlphaNodeBuilder::new().build());
-    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    let (graph, _) = diff1.apply(Graph::new()).expect("apply diff 1");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -587,7 +587,7 @@ fn add_node_without_property_then_node_with_property() {
             .unwrap()
             .build(),
     );
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -608,14 +608,14 @@ fn add_node_with_property_then_node_without_property() {
             .unwrap()
             .build(),
     );
-    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    let (graph, _) = diff1.apply(Graph::new()).expect("apply diff 1");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
 
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.add_node(builders::AlphaNodeBuilder::new().build());
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -636,14 +636,14 @@ fn add_three_nodes_with_property_gap_in_middle() {
             .unwrap()
             .build(),
     );
-    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    let (graph, _) = diff1.apply(Graph::new()).expect("apply diff 1");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
 
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.add_node(builders::AlphaNodeBuilder::new().build());
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -655,7 +655,7 @@ fn add_three_nodes_with_property_gap_in_middle() {
             .unwrap()
             .build(),
     );
-    let graph = diff3.apply(graph).expect("apply diff 3");
+    let (graph, _) = diff3.apply(graph).expect("apply diff 3");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -672,7 +672,7 @@ fn add_three_nodes_with_property_gap_in_middle() {
 fn add_three_nodes_without_property_gap_in_middle() {
     let mut diff1 = GraphDiff::<TestSchema>::default();
     diff1.add_node(builders::AlphaNodeBuilder::new().build());
-    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    let (graph, _) = diff1.apply(Graph::new()).expect("apply diff 1");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -684,14 +684,14 @@ fn add_three_nodes_without_property_gap_in_middle() {
             .unwrap()
             .build(),
     );
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
 
     let mut diff3 = GraphDiff::<TestSchema>::default();
     diff3.add_node(builders::AlphaNodeBuilder::new().build());
-    let graph = diff3.apply(graph).expect("apply diff 3");
+    let (graph, _) = diff3.apply(graph).expect("apply diff 3");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -714,7 +714,7 @@ fn add_edge_between_new_nodes() {
     let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
     diff.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -748,7 +748,7 @@ fn add_edge_endpoints_are_correct() {
     let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
     diff.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -781,7 +781,7 @@ fn add_multiple_edges_same_kind() {
     diff.add_edge(alpha_id, beta1_id, TestEdge::Plain, None);
     diff.add_edge(alpha_id, beta2_id, TestEdge::Plain, None);
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -803,7 +803,7 @@ fn add_edge_between_existing_nodes() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());
     setup.add_node(builders::BetaNodeBuilder::new().build());
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -823,7 +823,7 @@ fn add_edge_between_existing_nodes() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.add_edge(alpha_ref, beta_ref, TestEdge::Plain, None);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -846,7 +846,7 @@ fn add_edge_between_existing_nodes() {
 fn add_edge_between_new_and_existing_node() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -861,7 +861,7 @@ fn add_edge_between_new_and_existing_node() {
     let mut diff = GraphDiff::<TestSchema>::default();
     let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
     diff.add_edge(alpha_ref, beta_id, TestEdge::Plain, None);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -896,7 +896,7 @@ fn add_edge_with_property_stores_property() {
         Some(PropertyValue::String("x".to_string())),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -927,7 +927,7 @@ fn setup_three_file_nodes() -> Graph<TestSchema> {
                 .build(),
         );
     }
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -941,7 +941,7 @@ fn remove_first_of_many_nodes_preserves_others() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[0]);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -965,7 +965,7 @@ fn remove_middle_of_many_nodes_preserves_others() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[1]);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -989,7 +989,7 @@ fn remove_last_of_many_nodes_preserves_others() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&nodes[2]);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1019,7 +1019,7 @@ fn setup_graph_with_fan_out_edges() -> (
     for &beta_id in &beta_ids {
         setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
     }
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1055,7 +1055,7 @@ fn remove_first_of_many_out_edges_preserves_others() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_edge(edge_to_b0);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1100,7 +1100,7 @@ fn remove_middle_of_many_out_edges_preserves_others() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_edge(edge_to_b1);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1133,7 +1133,7 @@ fn remove_last_of_many_out_edges_preserves_others() {
 
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_edge(edge_to_b2);
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1163,7 +1163,7 @@ fn update_first_of_many_nodes_leaves_others_unchanged() {
         TestProperty::Key,
         QuantifiedProperty::One(PropertyValue::String("updated.rs".to_string())),
     );
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1184,7 +1184,7 @@ fn update_middle_of_many_nodes_leaves_others_unchanged() {
         TestProperty::Key,
         QuantifiedProperty::One(PropertyValue::String("updated.rs".to_string())),
     );
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1205,7 +1205,7 @@ fn update_last_of_many_nodes_leaves_others_unchanged() {
         TestProperty::Key,
         QuantifiedProperty::One(PropertyValue::String("updated.rs".to_string())),
     );
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1242,7 +1242,7 @@ fn update_multi_valued_property_shrink_then_grow_leaves_siblings_unchanged() {
             .unwrap()
             .build(),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1257,7 +1257,7 @@ fn update_multi_valued_property_shrink_then_grow_leaves_siblings_unchanged() {
         TestProperty::Values,
         QuantifiedProperty::Multi(vec![PropertyValue::String("z0".to_string())]),
     );
-    let graph = shrink.apply(graph).expect("apply shrink");
+    let (graph, _) = shrink.apply(graph).expect("apply shrink");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1288,7 +1288,7 @@ fn update_multi_valued_property_shrink_then_grow_leaves_siblings_unchanged() {
                 .collect(),
         ),
     );
-    let graph = grow.apply(graph).expect("apply grow");
+    let (graph, _) = grow.apply(graph).expect("apply grow");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1316,7 +1316,7 @@ fn add_node_remove_then_add_new_node_is_accessible() {
             .unwrap()
             .build(),
     );
-    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    let (graph, _) = diff1.apply(Graph::new()).expect("apply diff 1");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1327,7 +1327,7 @@ fn add_node_remove_then_add_new_node_is_accessible() {
         .expect("Alpha node");
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.remove_node(&node);
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1340,7 +1340,7 @@ fn add_node_remove_then_add_new_node_is_accessible() {
             .unwrap()
             .build(),
     );
-    let graph = diff3.apply(graph).expect("apply diff 3");
+    let (graph, _) = diff3.apply(graph).expect("apply diff 3");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1365,7 +1365,7 @@ fn add_property_remove_then_readd_restores_value() {
             .unwrap()
             .build(),
     );
-    let graph = diff1.apply(Graph::new()).expect("apply diff 1");
+    let (graph, _) = diff1.apply(Graph::new()).expect("apply diff 1");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1376,7 +1376,7 @@ fn add_property_remove_then_readd_restores_value() {
 
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.update_node_property(&node, TestProperty::Key, QuantifiedProperty::Multi(vec![]));
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1394,7 +1394,7 @@ fn add_property_remove_then_readd_restores_value() {
         TestProperty::Key,
         QuantifiedProperty::One(PropertyValue::String("restored.rs".to_string())),
     );
-    let graph = diff3.apply(graph).expect("apply diff 3");
+    let (graph, _) = diff3.apply(graph).expect("apply diff 3");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1411,7 +1411,7 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
     let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1430,7 +1430,7 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
         .expect("out edges");
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.remove_edge(edges.into_iter().next().unwrap());
-    let graph = diff2.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff2.apply(graph).expect("apply diff 2");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1448,7 +1448,7 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
         TestEdge::Plain,
         None,
     );
-    let graph = diff3.apply(graph).expect("apply diff 3");
+    let (graph, _) = diff3.apply(graph).expect("apply diff 3");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1487,7 +1487,7 @@ fn gamma_node_scalar_properties_round_trip() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1505,7 +1505,7 @@ fn gamma_node_scalar_properties_round_trip() {
 fn gamma_node_with_node_id_property_round_trips() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1521,7 +1521,7 @@ fn gamma_node_with_node_id_property_round_trips() {
             .unwrap()
             .build(),
     );
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1544,7 +1544,7 @@ fn gamma_node_multi_valued_enum_property_round_trips() {
             .build(),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1601,7 +1601,7 @@ fn edge_scalar_properties_round_trip() {
         Some(PropertyValue::Double(0.125)),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1695,7 +1695,7 @@ fn edge_with_node_id_property_round_trips() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());
     setup.add_node(builders::BetaNodeBuilder::new().build());
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1716,7 +1716,7 @@ fn edge_with_node_id_property_round_trips() {
         TestEdge::RefersTo,
         Some(PropertyValue::from(beta)),
     );
-    let graph = diff.apply(graph).expect("apply diff");
+    let (graph, _) = diff.apply(graph).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -1759,7 +1759,7 @@ fn edge_with_enum_property_round_trips() {
         Some(PropertyValue::from(Status::Inactive)),
     );
 
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");

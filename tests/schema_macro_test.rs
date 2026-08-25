@@ -36,7 +36,7 @@ mod without_registry {
                 .build(),
         );
 
-        let graph = diff.apply(Graph::<MacroSchema>::new()).expect("apply diff");
+        let (graph, _) = diff.apply(Graph::<MacroSchema>::new()).expect("apply diff");
 
         let Some(Node::A(a)) = graph.a().next() else {
             panic!("expected Node::A");
@@ -90,7 +90,7 @@ mod with_registry {
                 .unwrap()
                 .build(),
         );
-        let graph = diff.apply(Graph::<MacroSchema>::new()).expect("apply diff");
+        let (graph, _) = diff.apply(Graph::<MacroSchema>::new()).expect("apply diff");
 
         let Some(Node::A(a)) = graph.a().next() else {
             panic!("expected Node::A");

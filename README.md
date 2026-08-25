@@ -13,7 +13,7 @@ Node, edge, and property kinds are defined at compile time as plain Rust enums, 
 
 `Graph<S>` and `GraphDiff<S>` are generic over a `Schema` `S`. The schema determines the flat array layout: the number of node/edge/property kinds it declares fixes the number and offsets of the storage slots, so the layout is derived from the schema rather than being pointer-based.
 
-A `Graph` is updated by applying a diff (`GraphDiff::apply`), which takes the `Graph` by value, mutates its flat storage directly (appending new nodes/edges, flipping deletion flags, overwriting updated properties), and returns it. `Graph` isn't `Clone`, so there's no way to keep the pre-update version around — Rust's ownership rules just guarantee you can never end up holding two out-of-sync copies at once.
+A `Graph` is updated by applying a diff (`GraphDiff::apply`), which takes the `Graph` by value, mutates its flat storage directly (appending new nodes/edges, flipping deletion flags, overwriting updated properties), and returns it together with a `Vec<NodeId<S>>` mapping each new node's diff-local id to the `NodeId<S>` it was assigned. `Graph` isn't `Clone`, so there's no way to keep the pre-update version around — Rust's ownership rules just guarantee you can never end up holding two out-of-sync copies at once.
 
 A few notable points about the model:
 
@@ -188,10 +188,10 @@ let alpha_id = diff.add_node(
 let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
 diff.add_edge(alpha_id, beta_id, SimpleEdge::Base, None);
 
-let graph = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
+let (graph, node_remapper) = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
 ```
 
-`add_node` takes a `NewNode<S>` (built via the generated `<Variant>NodeBuilder`) and returns a diff-local id that can be passed to `add_edge` as either endpoint. `add_edge` also accepts an already-committed `RawNodeId`/`NodeId<S>`/`NewNodeId`, so an edge can connect a brand-new node to one already in the graph. `apply` consumes the diff plus a graph — `Graph::new()` for the very first diff, or the `Graph` a previous `apply` returned — and returns the updated `Graph<S>`; diffs always apply incrementally, on top of whatever the previous one produced. Beyond `add_node`/`add_edge`, `GraphDiff` also has `remove_node(node_ref)`, `remove_edge(edge)`, and `update_node_property(node_ref, prop_kind, value)`.
+`add_node` takes a `NewNode<S>` (built via the generated `<Variant>NodeBuilder`) and returns a diff-local id that can be passed to `add_edge` as either endpoint. `add_edge` also accepts an already-committed `RawNodeId`/`NodeId<S>`/`NewNodeId`, so an edge can connect a brand-new node to one already in the graph. `apply` consumes the diff plus a graph — `Graph::new()` for the very first diff, or the `Graph` a previous `apply` returned — and returns the updated `Graph<S>` together with a `Vec<NodeId<S>>` that maps each `add_node` call's diff-local id (its position in the vec) to the `NodeId<S>` it was assigned in the graph; diffs always apply incrementally, on top of whatever the previous one produced. Beyond `add_node`/`add_edge`, `GraphDiff` also has `remove_node(node_ref)`, `remove_edge(edge)`, and `update_node_property(node_ref, prop_kind, value)`.
 
 #### `Graph`
 
@@ -313,9 +313,10 @@ Putting the `SimpleProperty`/`SimpleNode`/`SimpleEdge`/`SimpleSchema` pieces int
 ```rust
 use flatpg::{
     edge::{Direction, StoredEdge},
+    enum_property::NoEnumProps,
     graph::{Graph, builder::GraphDiff},
     prelude::*,
-    property::PropertyValue,
+    schema::Schema,
 };
 
 #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
@@ -350,17 +351,14 @@ enum SimpleEdge {
     Extended,
 }
 
-#[derive(Clone, Copy, EnumPropertyRegistry)]
-enum NoProps {}
-
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct SimpleSchema;
 
 impl Schema for SimpleSchema {
     type N = SimpleNode;
     type E = SimpleEdge;
     type P = SimpleProperty;
-    type EPR = NoProps;
+    type EPR = NoEnumProps;
 }
 
 let mut diff = GraphDiff::<SimpleSchema>::default();
@@ -373,7 +371,7 @@ let alpha_id = diff.add_node(
 let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
 diff.add_edge(alpha_id, beta_id, SimpleEdge::Base, None);
 
-let graph = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
+let (graph, _) = diff.apply(Graph::<SimpleSchema>::new()).expect("apply diff");
 
 let alpha = graph.nodes_by_kind(SimpleNode::Alpha).next().expect("Alpha node");
 assert_eq!(AlphaNode::new(&graph, alpha.seq()).key().unwrap(), "hello");

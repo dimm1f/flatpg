@@ -72,7 +72,7 @@ fn main() {
     );
     diff.add_edge(alpha_id, beta_id, SimpleEdge::Base, None);
 
-    let graph = diff
+    let (graph, _) = diff
         .apply(Graph::<SimpleSchema>::new())
         .expect("apply diff 1");
 
@@ -103,7 +103,7 @@ fn main() {
         Some(PropertyValue::String("refers-to".to_string())),
     );
 
-    let graph = diff.apply(graph).expect("apply diff 2");
+    let (graph, _) = diff.apply(graph).expect("apply diff 2");
 
     let Some(Node::Alpha(alpha)) = graph.alpha().next() else {
         panic!("expected Node::Alpha");

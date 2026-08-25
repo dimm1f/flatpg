@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::{
     EdgeDirectionKind, ItemAsStr, ItemIndex,
@@ -168,13 +168,13 @@ impl<S: Schema> GraphDiff<S> {
         self.changes.len() - 1
     }
 
-    pub fn apply(self, graph: impl GraphView<S>) -> Result<Graph<S>, Error> {
+    pub fn apply(self, graph: impl GraphView<S>) -> Result<(Graph<S>, Vec<NodeId<S>>), Error> {
         let mut graph = graph.into_graph();
         self.apply_changes(&mut graph)?;
 
         // Note: `node_remapper` must contain nodes with actual NodeSeq.
         // Therefore, the max seq per kind must be obtained from graph before mapping.
-        let mut node_remapper: HashMap<NewNodeId, RawNodeId> = HashMap::new();
+        let mut node_remapper: Vec<RawNodeId> = Vec::with_capacity(self.new_nodes.len());
         let graph_nodes_max_seq = S::node_kinds()
             .iter()
             .map(|k| graph.node_count_by_kind_with_deleted(*k))
@@ -194,7 +194,7 @@ impl<S: Schema> GraphDiff<S> {
 
         let mut slot_property = BTreeMap::new();
 
-        for (i, node) in self.new_nodes.iter().enumerate() {
+        for node in self.new_nodes.iter() {
             // Safety: seq_counters has number_of_node_kinds() elements; node.kind().index() is always in-bounds.
             let current_seq = unsafe { seq_counters.get_unchecked_mut(node.kind().index()) };
 
@@ -206,7 +206,7 @@ impl<S: Schema> GraphDiff<S> {
             let nodes_storage = unsafe { new_nodes.get_unchecked_mut(node.kind().index()) };
             nodes_storage.push(NodeMeta::default());
 
-            node_remapper.insert(i, RawNodeId::new(node.kind().index(), seq));
+            node_remapper.push(RawNodeId::new(node.kind().index(), seq));
 
             for (prop_kind, new_values) in node.properties() {
                 slot_property
@@ -224,7 +224,9 @@ impl<S: Schema> GraphDiff<S> {
             nodes.append(new_kind_nodes);
         }
 
-        // WARN: Properties and edges are inserted directly into the graph so any issues at this stage can corrupt the graph
+        // WARN: Properties and edges are inserted directly into the graph so any issues at this stage can corrupt
+        // the graph. This could be fixed by implementing transactions (staging these mutations and only committing
+        // them once the whole diff has applied successfully).
         for (node_kind, property_kind) in S::property_storage_slots_iter() {
             let nodes_count = new_nodes_count[node_kind.index()];
             if nodes_count == 0 {
@@ -284,7 +286,7 @@ impl<S: Schema> GraphDiff<S> {
 
         let resolve_node_ref = |node: &NewOrExistingNode| -> Option<RawNodeId> {
             match node {
-                NewOrExistingNode::New(id) => node_remapper.get(id).copied(),
+                NewOrExistingNode::New(id) => node_remapper.get(*id).copied(),
                 NewOrExistingNode::Existing(node_ref) => Some(*node_ref),
             }
         };
@@ -363,7 +365,12 @@ impl<S: Schema> GraphDiff<S> {
             }
         }
 
-        Ok(graph)
+        let node_remapper = node_remapper
+            .into_iter()
+            .map(NodeId::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok((graph, node_remapper))
     }
 
     fn apply_changes(&self, graph: &mut Graph<S>) -> Result<(), Error> {

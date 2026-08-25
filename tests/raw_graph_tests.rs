@@ -116,7 +116,7 @@ fn build_two_alpha_values_graph() -> Graph<TestSchema> {
             .unwrap()
             .build(),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -149,7 +149,7 @@ fn populated_graph_round_trips_through_raw_graph() {
         TestEdge::Labeled,
         Some(PropertyValue::String("p0".to_string())),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -176,7 +176,7 @@ fn edge_to_soft_deleted_node_passes_check_integrity() {
     let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -187,7 +187,7 @@ fn edge_to_soft_deleted_node_passes_check_integrity() {
         .expect("Beta node");
     let mut diff = GraphDiff::<TestSchema>::default();
     diff.remove_node(&beta);
-    let graph = diff.apply(graph).expect("apply remove");
+    let (graph, _) = diff.apply(graph).expect("apply remove");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -271,7 +271,7 @@ fn storage_type_mismatch_is_rejected() {
             .unwrap()
             .build(),
     );
-    let graph = diff.apply(Graph::new()).expect("apply diff");
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -292,7 +292,7 @@ fn dangling_node_id_out_of_bounds_is_rejected() {
     let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -322,7 +322,7 @@ fn foreign_string_id_is_rejected() {
             .unwrap()
             .build(),
     );
-    let graph_a = diff_a.apply(Graph::new()).expect("apply a");
+    let (graph_a, _) = diff_a.apply(Graph::new()).expect("apply a");
     graph_a
         .check_integrity()
         .expect("graph passes integrity check");
@@ -341,7 +341,7 @@ fn foreign_string_id_is_rejected() {
             .unwrap()
             .build(),
     );
-    let graph_b = diff_b.apply(Graph::new()).expect("apply b");
+    let (graph_b, _) = diff_b.apply(Graph::new()).expect("apply b");
     graph_b
         .check_integrity()
         .expect("graph passes integrity check");
@@ -365,7 +365,7 @@ fn unpaired_half_edge_is_rejected() {
     let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
     setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
@@ -403,7 +403,7 @@ fn parallel_edge_degree_mismatch_is_rejected() {
         TestEdge::Labeled,
         Some(PropertyValue::String("l0".to_string())),
     );
-    let graph = setup.apply(Graph::new()).expect("apply setup");
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
