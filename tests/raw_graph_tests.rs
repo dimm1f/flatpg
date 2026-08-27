@@ -1,5 +1,5 @@
 use flatpg::{
-    edge::{Direction, StoredEdge},
+    edge::Direction,
     error::Error,
     graph::{Graph, builder::GraphDiff, raw::RawGraph},
     prelude::*,
@@ -8,59 +8,7 @@ use flatpg::{
     storage::{Offset, OffsetStorage, StorageArray},
     strings_pool::RawStringId,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumProperty)]
-enum Status {
-    Active,
-    Inactive,
-    Banned,
-}
-
-#[derive(Debug, Clone, Copy, EnumPropertyRegistry)]
-enum TestPropEnumsRegistry {
-    #[enum_type(Status)]
-    Status,
-}
-
-#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
-enum TestProperty {
-    #[property(typ = String, quantity = One)]
-    Key,
-    #[property(typ = String, quantity = Multi)]
-    Values,
-    #[property(typ = Int, quantity = One)]
-    Count,
-    #[property(typ = Enum<Status>, quantity = One)]
-    State,
-}
-
-#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, NodeItemKind)]
-#[node_kind(schema = TestSchema, property_kind = TestProperty)]
-enum TestNode {
-    #[properties(Key, Values, State)]
-    Alpha,
-    #[properties(Count)]
-    Beta,
-}
-
-#[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, EdgeItemKind)]
-#[edge_kind(schema = TestSchema)]
-enum TestEdge {
-    #[property(typ = None)]
-    Plain,
-    #[property(typ = String)]
-    Labeled,
-}
-
-#[derive(Clone, Copy, Default, Debug)]
-struct TestSchema;
-
-impl Schema for TestSchema {
-    type N = TestNode;
-    type E = TestEdge;
-    type P = TestProperty;
-    type EPR = TestPropEnumsRegistry;
-}
+use test_fixtures::*;
 
 /// Corrupts the graph on purpose, for testing.
 ///

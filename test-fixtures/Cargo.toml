@@ -1,0 +1,10 @@
+[package]
+name = "test-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Shared Schema fixture for flatpg's integration tests and benchmarks"
+
+[dependencies]
+flatpg = { path = ".." }
