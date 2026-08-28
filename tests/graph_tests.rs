@@ -1125,6 +1125,58 @@ fn remove_middle_of_many_out_edges_preserves_others() {
 }
 
 #[test]
+fn remove_existing_and_add_new_edge_sharing_an_edge_slot_in_one_diff() {
+    // `alpha`'s out-edge slot is touched twice in the same diff: once by removing an
+    // existing edge, once by adding a new edge to a brand-new node. `apply`'s new-edge
+    // insertion must start from the post-removal offsets, not the graph's pre-diff
+    // offsets, or the new edge lands at the wrong position (or panics).
+    let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
+    let (beta0, beta1, beta2) = (betas[0], betas[1], betas[2]);
+
+    let edge_to_b1 = graph
+        .get_edges(alpha, TestEdge::Plain, Direction::Out)
+        .expect("out edges")
+        .into_iter()
+        .find(|e| e.dst_node().seq() == beta1.seq())
+        .expect("edge to beta1");
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.remove_edge(edge_to_b1);
+    let new_beta = diff.add_node(builders::BetaNodeBuilder::new().build());
+    diff.add_edge(alpha, new_beta, TestEdge::Plain, None);
+
+    let (graph, ids) = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+    let new_beta_id = ids[0];
+
+    let dsts = out_edge_dst_seqs(&graph, alpha);
+    assert_eq!(dsts.len(), 3);
+    assert!(dsts.contains(&beta0.seq()));
+    assert!(!dsts.contains(&beta1.seq()));
+    assert!(dsts.contains(&beta2.seq()));
+    assert!(dsts.contains(&new_beta_id.seq()));
+
+    assert_eq!(
+        graph
+            .get_edges_count(RawNodeId::from(&beta1), TestEdge::Plain, Direction::In)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        graph
+            .get_edges_count(
+                RawNodeId::from(&new_beta_id),
+                TestEdge::Plain,
+                Direction::In
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn remove_last_of_many_out_edges_preserves_others() {
     let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
     let (beta0, beta1, beta2) = (betas[0], betas[1], betas[2]);
@@ -1309,6 +1361,66 @@ fn update_multi_valued_property_shrink_then_grow_leaves_siblings_unchanged() {
     assert_eq!(
         AlphaNode::new(&graph, nodes[2].seq()).values().unwrap(),
         vec!["c0", "c1"]
+    );
+}
+
+#[test]
+fn update_existing_and_add_new_node_sharing_a_property_slot_in_one_diff() {
+    // The Alpha/Values property slot is touched twice in the same diff: once by
+    // updating an existing node's Multi property (changing its element count), once
+    // by adding a brand-new Alpha node with its own Values. The new node's property
+    // batch must be appended after the *updated* offsets, not the graph's pre-diff
+    // offsets, or its values land at the wrong position (or panic).
+    let mut setup = GraphDiff::<TestSchema>::default();
+    setup.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Values, "a0".to_string())
+            .unwrap()
+            .add_property(TestProperty::Values, "a1".to_string())
+            .unwrap()
+            .build(),
+    );
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+    let existing: NodeId<TestSchema> = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.update_node_property(
+        &existing,
+        TestProperty::Values,
+        QuantifiedProperty::Multi(
+            ["z0", "z1", "z2"]
+                .into_iter()
+                .map(|v| PropertyValue::String(v.to_string()))
+                .collect(),
+        ),
+    );
+    diff.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Values, "b0".to_string())
+            .unwrap()
+            .add_property(TestProperty::Values, "b1".to_string())
+            .unwrap()
+            .build(),
+    );
+    let (graph, ids) = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+    let new_node = ids[0];
+
+    assert_eq!(
+        AlphaNode::new(&graph, existing.seq()).values().unwrap(),
+        vec!["z0", "z1", "z2"]
+    );
+    assert_eq!(
+        AlphaNode::new(&graph, new_node.seq()).values().unwrap(),
+        vec!["b0", "b1"]
     );
 }
 
