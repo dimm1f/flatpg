@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::{
     EdgeDirectionKind, ItemAsStr, ItemIndex,
     edge::{Direction, EdgeId, RawEdgeId},
@@ -27,6 +25,28 @@ struct NewEdge<S: Schema> {
     dst: NewOrExistingNode,
     kind: EdgeKind<S>,
     property: Option<PropertyValue>,
+}
+
+struct SlotBuckets<T>(Vec<Option<Vec<T>>>);
+
+impl<T> SlotBuckets<T> {
+    fn new(slot_count: usize) -> Self {
+        Self((0..slot_count).map(|_| None).collect())
+    }
+
+    fn get(&self, slot_index: usize) -> Option<&Vec<T>> {
+        self.0[slot_index].as_ref()
+    }
+
+    fn take(&mut self, slot_index: usize) -> Option<Vec<T>> {
+        self.0[slot_index].take()
+    }
+}
+
+impl<T: Default> SlotBuckets<T> {
+    fn bucket(&mut self, slot_index: usize, len: usize) -> &mut Vec<T> {
+        self.0[slot_index].get_or_insert_with(|| (0..len).map(|_| T::default()).collect())
+    }
 }
 
 type ChangeId = usize;
@@ -168,6 +188,18 @@ impl<S: Schema> GraphDiff<S> {
         self.changes.len() - 1
     }
 
+    // NOTE: Be careful when you apply several diffs that were built from the same graph, one
+    // after another. Ids from an earlier diff can become wrong once an earlier `apply` call
+    // changes the graph, and this does not always cause an error:
+    // - `remove_edge` finds a half-edge by its position in the node's own edge list. When one
+    //   diff removes an edge, every later edge on that node moves one position down. If another
+    //   diff still holds an edge id from before that removal, it may now point to a different
+    //   edge on the same node and remove it silently, with no error.
+    // - `remove_node` only marks a node as deleted, so node ids stay valid across diffs. But
+    //   `update_node_property` does not check whether the node was already deleted by an
+    //   earlier diff, so a later diff can still write a property onto a deleted node.
+    // To stay safe, apply one diff, then build the next diff from the graph `apply` just
+    // returned, instead of reusing ids from before that call.
     pub fn apply(self, graph: impl GraphView<S>) -> Result<(Graph<S>, Vec<NodeId<S>>), Error> {
         let mut graph = graph.into_graph();
         self.apply_changes(&mut graph)?;
@@ -192,7 +224,8 @@ impl<S: Schema> GraphDiff<S> {
 
         let mut seq_counters = vec![0usize; S::number_of_node_kinds()];
 
-        let mut slot_property = BTreeMap::new();
+        let mut slot_property: SlotBuckets<Option<&Vec<PropertyValue>>> =
+            SlotBuckets::new(S::property_storage_size());
 
         for node in self.new_nodes.iter() {
             // Safety: seq_counters has number_of_node_kinds() elements; node.kind().index() is always in-bounds.
@@ -209,13 +242,15 @@ impl<S: Schema> GraphDiff<S> {
             node_remapper.push(RawNodeId::new(node.kind().index(), seq));
 
             for (prop_kind, new_values) in node.properties() {
-                slot_property
-                    .entry((node.kind(), *prop_kind))
-                    .or_insert_with(BTreeMap::new)
-                    .insert(local_index, new_values);
+                let slot_index = S::property_storage_slot(node.kind(), *prop_kind).index();
+                let nodes_count = new_nodes_count[node.kind().index()];
+                slot_property.bucket(slot_index, nodes_count)[local_index] = Some(new_values);
             }
         }
 
+        // WARN: May break the graph. This appends new node metadata unconditionally. If the
+        // property/edge population below fails partway, these nodes stay in `graph` without
+        // fully populated storage, since none of this is rolled back on error.
         for kind in S::node_kinds() {
             // Safety: both graph.node_meta_storage and new_nodes have number_of_node_kinds()
             // slots; kind.index() is in-bounds; separate storages cannot alias.
@@ -224,9 +259,10 @@ impl<S: Schema> GraphDiff<S> {
             nodes.append(new_kind_nodes);
         }
 
-        // WARN: Properties and edges are inserted directly into the graph so any issues at this stage can corrupt
-        // the graph. This could be fixed by implementing transactions (staging these mutations and only committing
-        // them once the whole diff has applied successfully).
+        // WARN: May break the graph. Properties and edges are inserted directly into the graph so
+        // any issues at this stage can corrupt the graph. This could be fixed by implementing
+        // transactions (staging these mutations and only committing them once the whole diff
+        // has applied successfully).
         for (node_kind, property_kind) in S::property_storage_slots_iter() {
             let nodes_count = new_nodes_count[node_kind.index()];
             if nodes_count == 0 {
@@ -236,11 +272,7 @@ impl<S: Schema> GraphDiff<S> {
             let slot_index = S::property_storage_slot(node_kind, property_kind).index();
             let slot = &mut graph.property_storage[slot_index];
 
-            let seq_property = slot_property
-                .get(&(node_kind, property_kind))
-                .filter(|m| !m.is_empty());
-
-            let Some(seq_property) = seq_property else {
+            let Some(seq_property) = slot_property.get(slot_index) else {
                 if !slot.offsets().is_empty() {
                     let new_len = slot.offsets().len() + nodes_count;
                     let last = slot.offsets().last().copied().unwrap_or_else(Offset::zero);
@@ -256,12 +288,9 @@ impl<S: Schema> GraphDiff<S> {
 
             let mut cumulative = slot.offsets().last().copied().unwrap_or_else(Offset::zero);
             for local_index in 0..nodes_count {
-                if let Some(props) = seq_property.get(&local_index) {
-                    let mut batch = StorageArray::with_capacity(slot.values().typ(), props.len());
-                    for prop in props.iter() {
-                        let prop = to_stored_property(prop, &mut graph.strings);
-                        batch.try_push(&prop)?;
-                    }
+                if let Some(props) = seq_property.get(local_index).copied().flatten() {
+                    let mut batch =
+                        stored_property_batch(props, slot.values().typ(), &mut graph.strings)?;
                     cumulative = cumulative.checked_add_delta(props.len())?;
                     slot.values_mut().try_append(&mut batch)?;
                 }
@@ -291,58 +320,57 @@ impl<S: Schema> GraphDiff<S> {
             }
         };
 
-        let slot_edge_halves = self
-            .new_edges
-            .iter()
-            .filter_map(|new_edge| {
-                let property = new_edge
-                    .property
-                    .as_ref()
-                    .map(|prop| to_stored_property(prop, &mut graph.strings));
-                edge_to_halves(new_edge, resolve_node_ref, property)
-            })
-            // Access `graph.node_meta_storage` directly (rather than through the
-            // `graph.is_node_deleted` method, which would borrow all of `graph`) so this
-            // closure's borrow stays disjoint from the `&mut graph.strings` borrow
-            // captured by the closure above.
-            .filter(|halves| {
-                halves
-                    .iter()
-                    .all(|h| !node_is_deleted::<S>(&graph.node_meta_storage, h.node))
-            })
-            .flatten()
-            .fold(BTreeMap::new(), |mut acc, half| {
-                acc.entry((half.node.kind(), half.direction, half.edge_kind))
-                    .or_insert_with(BTreeMap::new)
-                    .entry(half.node.seq())
-                    .or_insert_with(Vec::new)
-                    .push(half);
-                acc
-            });
+        let mut slot_edge_halves: SlotBuckets<Vec<HalfEdge<S>>> =
+            SlotBuckets::new(S::edge_storage_size());
 
-        for ((node_kind, direction, edge_kind), seq_halves) in slot_edge_halves {
+        for new_edge in &self.new_edges {
+            let property = new_edge
+                .property
+                .as_ref()
+                .map(|prop| to_stored_property(prop, &mut graph.strings));
+            let Some(halves) = edge_to_halves(new_edge, resolve_node_ref, property) else {
+                continue;
+            };
+            // Both halves must survive together: an edge with either endpoint deleted is
+            // dropped entirely, not partially. This also guarantees every half's seq()
+            // below is in-bounds (node_is_deleted treats an out-of-range seq as deleted
+            // too), which is what makes the direct bucket indexing below safe.
+            if halves
+                .iter()
+                .any(|h| node_is_deleted::<S>(&graph.node_meta_storage, h.node))
+            {
+                continue;
+            }
+            for half in halves {
+                let slot_index =
+                    S::edge_storage_slot(half.node.kind(), half.direction, half.edge_kind).index();
+                let node_count = graph.node_meta_storage[half.node.kind().index()].len();
+                slot_edge_halves.bucket(slot_index, node_count)[half.node.seq()].push(half);
+            }
+        }
+
+        for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
             let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind).index();
+            let Some(seq_halves) = slot_edge_halves.take(slot_index) else {
+                continue;
+            };
             let slot = &mut graph.edge_storage[slot_index];
 
-            if !seq_halves.is_empty() {
-                let offsets_len = graph.node_meta_storage[node_kind.index()].len() + 1;
-                if slot.offsets().is_empty() {
-                    *slot.offsets_mut() = vec![Offset::zero(); offsets_len];
-                } else if slot.offsets().len() != offsets_len {
-                    let last = slot.offsets().last().cloned().unwrap_or_else(Offset::zero);
-                    slot.offsets_mut().resize(offsets_len, last);
-                }
-            } else {
-                continue;
+            let offsets_len = graph.node_meta_storage[node_kind.index()].len() + 1;
+            if slot.offsets().is_empty() {
+                *slot.offsets_mut() = vec![Offset::zero(); offsets_len];
+            } else if slot.offsets().len() != offsets_len {
+                let last = slot.offsets().last().cloned().unwrap_or_else(Offset::zero);
+                slot.offsets_mut().resize(offsets_len, last);
             }
 
             let mut delta = 0;
 
-            #[allow(clippy::needless_range_loop)]
             for end in 1..slot.offsets().len() {
                 let start = end - 1;
 
-                if let Some(halves) = seq_halves.get(&start) {
+                let halves = &seq_halves[start];
+                if !halves.is_empty() {
                     let new_neighbors = halves.iter().map(|h| RawNodeId::from(&h.neighbor));
 
                     let place = slot.offsets()[end].value() + delta;
@@ -374,6 +402,11 @@ impl<S: Schema> GraphDiff<S> {
     }
 
     fn apply_changes(&self, graph: &mut Graph<S>) -> Result<(), Error> {
+        let mut slot_property_updates: SlotBuckets<Option<&QuantifiedProperty>> =
+            SlotBuckets::new(S::property_storage_size());
+        let mut slot_edge_removals: SlotBuckets<Vec<usize>> =
+            SlotBuckets::new(S::edge_storage_size());
+
         for change in &self.changes {
             match change {
                 Change::RemoveNode(node_ref) => {
@@ -381,110 +414,232 @@ impl<S: Schema> GraphDiff<S> {
                     if let Some(seq) =
                         graph.node_meta_storage[node.kind().index()].get_mut(node_ref.seq())
                     {
+                        // WARN: May break the graph. This tombstone is written immediately and
+                        // isn't rolled back if a later change in this same diff fails below.
                         seq.set_is_deleted(true);
                     }
                 }
                 Change::UpdateNodeProperty(node_ref, property_kind, quantified_property) => {
                     let node: NodeId<S> = (*node_ref).try_into()?;
                     let slot_index = S::property_storage_slot(node.kind(), *property_kind).index();
-                    let slot = &mut graph.property_storage[slot_index];
+                    let node_count = graph.node_meta_storage[node.kind().index()].len();
 
-                    let new_values: &[PropertyValue] = match quantified_property {
-                        QuantifiedProperty::One(p) => std::slice::from_ref(p),
-                        QuantifiedProperty::Multi(ps) => ps.as_slice(),
-                    };
-
-                    // Intern any strings before taking the disjoint borrow of graph.properties
-                    // below, so the two mutable borrows never need to overlap.
-                    let stored_values: Vec<StoredProperty> = new_values
-                        .iter()
-                        .map(|prop| to_stored_property(prop, &mut graph.strings))
-                        .collect();
-
-                    let Some((start, end)) = slot.get_offset(node_ref.seq()) else {
+                    let Some(slot) = slot_property_updates
+                        .bucket(slot_index, node_count)
+                        .get_mut(node_ref.seq())
+                    else {
                         return Err(Error::node_offset_not_found(node_ref.seq()));
                     };
-                    let old_count = end.checked_sub(start)?;
-                    let new_count = stored_values.len();
-
-                    slot.values_mut().try_drain(start.value()..end.value())?;
-                    for (i, prop) in stored_values.iter().enumerate() {
-                        slot.values_mut().try_insert(start.value() + i, prop)?;
-                    }
-
-                    #[allow(clippy::needless_range_loop)]
-                    for i in (node_ref.seq() + 1)..slot.offsets().len() {
-                        slot.offsets_mut()[i] = if new_count >= old_count {
-                            slot.offsets()[i].checked_add_delta(new_count - old_count)?
-                        } else {
-                            slot.offsets()[i].checked_sub_delta(old_count - new_count)?
-                        };
-                    }
+                    *slot = Some(quantified_property);
                 }
                 Change::RemoveEdge(edge) => {
                     let src = edge.src_node_id();
                     let dst = edge.dst();
                     let edge_kind = S::resolve_edge_kind(edge.handle())?;
-                    let seq = edge.handle().seq();
+                    let primary_seq = edge.handle().seq();
 
                     let (primary, primary_dir, secondary, secondary_dir) =
                         S::resolve_edge_direction(edge.handle())?.orient_edge(src, dst);
 
-                    // Find the secondary position before modifying the graph
-                    let secondary_seq =
-                        find_reverse_edge_seq(graph, secondary, secondary_dir, edge_kind, primary)?;
+                    // Record the primary half first: this is what detects the same edge
+                    // being queued for removal twice in one diff, which collapses into a
+                    // single removal instead of being processed twice. This needs to happen
+                    // before the secondary-half scan below, or that scan would instead fail
+                    // once its position was already excluded by the first occurrence.
+                    let primary_kind = S::resolve_node_kind(primary)?;
+                    let primary_slot_index =
+                        S::edge_storage_slot(primary_kind, primary_dir, edge_kind).index();
+                    let primary_count = graph.node_meta_storage[primary_kind.index()].len();
 
-                    remove_half_edge(graph, primary, primary_dir, edge_kind, seq)?;
-                    remove_half_edge(graph, secondary, secondary_dir, edge_kind, secondary_seq)?;
+                    let bucket = &mut slot_edge_removals.bucket(primary_slot_index, primary_count)
+                        [primary.seq()];
+
+                    if bucket.contains(&primary_seq) {
+                        continue;
+                    }
+
+                    bucket.push(primary_seq);
+
+                    let secondary_kind = S::resolve_node_kind(secondary)?;
+                    let secondary_slot_index =
+                        S::edge_storage_slot(secondary_kind, secondary_dir, edge_kind).index();
+                    let secondary_count = graph.node_meta_storage[secondary_kind.index()].len();
+
+                    let already_claimed = slot_edge_removals
+                        .get(secondary_slot_index)
+                        .and_then(|bucket| bucket.get(secondary.seq()))
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+
+                    let secondary_seq = find_reverse_edge_seq(
+                        graph,
+                        secondary,
+                        secondary_slot_index,
+                        secondary_dir,
+                        edge_kind,
+                        primary,
+                        already_claimed,
+                    )?;
+
+                    slot_edge_removals.bucket(secondary_slot_index, secondary_count)
+                        [secondary.seq()]
+                    .push(secondary_seq);
                 }
             }
         }
+
+        apply_property_updates(graph, slot_property_updates)?;
+        apply_edge_removals(graph, slot_edge_removals)?;
         Ok(())
     }
 }
 
-fn remove_half_edge<S>(
+fn apply_property_updates<S: Schema>(
     graph: &mut Graph<S>,
-    node_ref: RawNodeId,
-    direction: Direction,
-    edge_kind: EdgeKind<S>,
-    local_seq: usize,
-) -> Result<(), Error>
-where
-    S: Schema,
-{
-    let node_kind = S::resolve_node_kind(node_ref)?;
-    let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind).index();
-    let slot = &mut graph.edge_storage[slot_index];
+    mut pending: SlotBuckets<Option<&QuantifiedProperty>>,
+) -> Result<(), Error> {
+    for (node_kind, property_kind) in S::property_storage_slots_iter() {
+        let slot_index = S::property_storage_slot(node_kind, property_kind).index();
+        let Some(seq_updates) = pending.take(slot_index) else {
+            continue;
+        };
+        let slot = &mut graph.property_storage[slot_index];
 
-    let Some((start, _)) = slot.get_offset(node_ref.seq()) else {
-        return Err(Error::node_offset_not_found(node_ref.seq()));
-    };
-    let idx = start.checked_add_delta(local_seq)?;
+        if slot.offsets().is_empty() {
+            if let Some(seq) = seq_updates.iter().position(Option::is_some) {
+                return Err(Error::node_offset_not_found(seq));
+            }
+            continue;
+        }
 
-    slot.neighbors_mut().drain(idx.value()..idx.value() + 1);
-    slot.values_mut().try_drain(idx.value()..idx.value() + 1)?;
+        let property_type = slot.values().typ();
+        let mut new_values = StorageArray::with_capacity(property_type, slot.values().len());
+        let mut new_offsets = Vec::with_capacity(slot.offsets().len());
+        new_offsets.push(Offset::zero());
 
-    #[allow(clippy::needless_range_loop)]
-    for i in (node_ref.seq() + 1)..slot.offsets().len() {
-        slot.offsets_mut()[i] = slot.offsets()[i].checked_sub_delta(1)?;
+        let mut cumulative = Offset::zero();
+        for end in 1..slot.offsets().len() {
+            let start = end - 1;
+            let orig_start = slot.offsets()[start];
+            let orig_end = slot.offsets()[end];
+
+            let count = if let Some(quantified_property) = seq_updates[start] {
+                let new_node_values: &[PropertyValue] = match quantified_property {
+                    QuantifiedProperty::One(p) => std::slice::from_ref(p),
+                    QuantifiedProperty::Multi(ps) => ps.as_slice(),
+                };
+                let mut batch =
+                    stored_property_batch(new_node_values, property_type, &mut graph.strings)?;
+                let count = batch.len();
+                new_values.try_append(&mut batch)?;
+                count
+            } else {
+                for prop in slot
+                    .values()
+                    .iter_range(orig_start.value()..orig_end.value())
+                {
+                    new_values.try_push(&prop)?;
+                }
+                orig_end.checked_sub(orig_start)?
+            };
+
+            cumulative = cumulative.checked_add_delta(count)?;
+            new_offsets.push(cumulative);
+        }
+
+        // WARN: May break the graph. This commits the rebuilt slot immediately. If a later slot in
+        // this loop fails, earlier committed slots stay mutated while later ones never apply.
+        *slot.values_mut() = new_values;
+        *slot.offsets_mut() = new_offsets;
     }
+    Ok(())
+}
 
+fn apply_edge_removals<S: Schema>(
+    graph: &mut Graph<S>,
+    mut pending: SlotBuckets<Vec<usize>>,
+) -> Result<(), Error> {
+    for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
+        let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind).index();
+        let Some(seq_removals) = pending.take(slot_index) else {
+            continue;
+        };
+        let slot = &mut graph.edge_storage[slot_index];
+        if slot.offsets().is_empty() {
+            continue;
+        }
+
+        let total_removals: usize = seq_removals.iter().map(Vec::len).sum();
+        let mut absolute_removals: Vec<usize> = Vec::with_capacity(total_removals);
+        for (start, local_seqs) in seq_removals.iter().enumerate() {
+            if local_seqs.is_empty() {
+                continue;
+            }
+            let (orig_start, orig_end) = slot
+                .get_offset(start)
+                .ok_or_else(|| Error::node_offset_not_found(start))?;
+            let degree = orig_end.checked_sub(orig_start)?;
+            for &local_seq in local_seqs {
+                if local_seq >= degree {
+                    return Err(Error::node_offset_not_found(local_seq));
+                }
+                absolute_removals.push(orig_start.value() + local_seq);
+            }
+        }
+        if absolute_removals.is_empty() {
+            continue;
+        }
+        absolute_removals.sort_unstable();
+
+        let property_type = slot.values().typ();
+        let mut removal_iter = absolute_removals.iter().copied().peekable();
+        let mut new_neighbors =
+            Vec::with_capacity(slot.neighbors().len() - absolute_removals.len());
+        let mut new_values = StorageArray::with_capacity(
+            property_type,
+            slot.values().len().saturating_sub(absolute_removals.len()),
+        );
+        for (i, &neighbor) in slot.neighbors().iter().enumerate() {
+            if removal_iter.peek() == Some(&i) {
+                removal_iter.next();
+                continue;
+            }
+            new_neighbors.push(neighbor);
+            if let Some(v) = slot.values().get(i) {
+                new_values.try_push(&v)?;
+            }
+        }
+        // WARN: May break the graph. Neighbors/values are committed immediately, and the offsets
+        // shift below can still fail partway, or a later slot in this loop can fail entirely,
+        // leaving this slot's storage mutated with no rollback.
+        *slot.neighbors_mut() = new_neighbors;
+        *slot.values_mut() = new_values;
+
+        // Per-node removal counts, not `absolute_removals`, drive the shift here: each
+        // node's own count from `seq_removals` is already exactly how much every offset
+        // from that node onward must decrease by, with no need to re-derive it from the
+        // sorted absolute-position array the filter pass above used.
+        let mut removed_so_far = 0usize;
+        for end in 1..slot.offsets().len() {
+            removed_so_far += seq_removals[end - 1].len();
+            slot.offsets_mut()[end] = slot.offsets()[end].checked_sub_delta(removed_so_far)?;
+        }
+    }
     Ok(())
 }
 
 fn find_reverse_edge_seq<S>(
     graph: &Graph<S>,
     node: RawNodeId,
+    slot_index: usize,
     direction: Direction,
     edge_kind: EdgeKind<S>,
     target: RawNodeId,
+    excluded: &[usize],
 ) -> Result<usize, Error>
 where
     S: Schema,
 {
-    let node: NodeId<S> = node.try_into()?;
-    let slot_index = S::edge_storage_slot(node.kind(), direction, edge_kind).index();
     let slot = &graph.edge_storage[slot_index];
 
     let Some((start, end)) = slot.get_offset(node.seq()) else {
@@ -492,15 +647,19 @@ where
     };
 
     slot.get_neighbors(start, end)
-        .position(|n| n == target)
-        .ok_or_else(|| match target.try_into() {
-            Ok::<NodeId<S>, _>(target) => Error::reverse_edge_not_found(
-                target.to_string(),
-                node.to_string(),
-                direction.as_str().to_owned(),
-                edge_kind.as_str().to_owned(),
-            ),
-            Err(e) => e,
+        .enumerate()
+        .find(|(local_seq, neighbor)| *neighbor == target && !excluded.contains(local_seq))
+        .map(|(local_seq, _)| local_seq)
+        .ok_or_else(|| match (node.try_into(), target.try_into()) {
+            (Ok::<NodeId<S>, _>(node), Ok::<NodeId<S>, _>(target)) => {
+                Error::reverse_edge_not_found(
+                    target.to_string(),
+                    node.to_string(),
+                    direction.as_str().to_owned(),
+                    edge_kind.as_str().to_owned(),
+                )
+            }
+            (Err(e), _) | (_, Err(e)) => e,
         })
 }
 
@@ -533,6 +692,19 @@ where
     };
 
     Some([src_half, dst_half])
+}
+
+fn stored_property_batch(
+    values: &[PropertyValue],
+    typ: PropertyType,
+    strings: &mut StringsPool,
+) -> Result<StorageArray, Error> {
+    let mut batch = StorageArray::with_capacity(typ, values.len());
+    for prop in values {
+        let prop = to_stored_property(prop, strings);
+        batch.try_push(&prop)?;
+    }
+    Ok(batch)
 }
 
 fn to_stored_property(prop: &PropertyValue, strings: &mut StringsPool) -> StoredProperty {
