@@ -2255,6 +2255,7 @@ fn gamma_node_scalar_properties_round_trip() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn gamma_node_with_node_id_property_round_trips() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());
@@ -2444,6 +2445,7 @@ fn edge_scalar_properties_round_trip() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn edge_with_node_id_property_round_trips() {
     let mut setup = GraphDiff::<TestSchema>::default();
     setup.add_node(builders::AlphaNodeBuilder::new().build());

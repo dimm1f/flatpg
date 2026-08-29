@@ -7,7 +7,9 @@ use crate::enum_derives::{
     PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
     require_type_param,
 };
-use crate::property_trait_derives::{PropertyBinding, TYP_NONE, TYP_STRING, property_binding};
+use crate::property_trait_derives::{
+    NODE_ID_DEPRECATION_NOTE, PropertyBinding, TYP_NODE_ID, TYP_NONE, TYP_STRING, property_binding,
+};
 
 const EDGE_KIND_ATTR: &str = "edge_kind";
 
@@ -56,7 +58,11 @@ fn build_edge_property_method(
         quote!(&self)
     };
 
+    let deprecated =
+        (typ_name == TYP_NODE_ID).then(|| quote!(#[deprecated(note = #NODE_ID_DEPRECATION_NOTE)]));
+
     Ok(quote! {
+        #deprecated
         #vis fn property(#self_param) -> Result<Option<#elem_ty>, flatpg::error::Error> {
             self.graph()
                 .get_edge_property(self.edge())?

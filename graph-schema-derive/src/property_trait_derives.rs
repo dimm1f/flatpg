@@ -20,6 +20,10 @@ pub(crate) const TYP_STRING: &str = "String";
 pub(crate) const TYP_ENUM: &str = "Enum";
 pub(crate) const QTY_MULTI: &str = "Multi";
 
+pub(crate) const NODE_ID_DEPRECATION_NOTE: &str = "this property stores a raw NodeId that is not \
+    updated or checked when the referenced node is deleted, so it can silently become a dangling \
+    reference; verify the target node still exists before trusting it";
+
 pub fn property_traits_derive(input: &ItemEnum) -> TokenStream {
     let enum_ident = &input.ident;
     let vis = &input.vis;
@@ -226,6 +230,9 @@ fn build_property_trait(
         (quote!(), quote!(&self), quote!())
     };
 
+    let deprecated =
+        (typ_name == TYP_NODE_ID).then(|| quote!(#[deprecated(note = #NODE_ID_DEPRECATION_NOTE)]));
+
     let method = if is_multi {
         quote! {
             fn #method_name #generics (#self_param) -> Result<Vec<#elem_ty>, flatpg::error::Error>
@@ -257,6 +264,7 @@ fn build_property_trait(
     };
 
     Ok(quote! {
+        #deprecated
         #vis trait #variant<S: flatpg::schema::Schema<P = #enum_ident>>: flatpg::node::StoredNode<S> {
             #method
         }

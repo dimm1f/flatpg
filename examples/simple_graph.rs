@@ -52,6 +52,7 @@ enum SimpleEdge {
 
 schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsRegistry);
 
+#[allow(deprecated)]
 fn main() {
     let mut diff = GraphDiff::<SimpleSchema>::default();
     let alpha_id = diff.add_node(
