@@ -186,7 +186,7 @@ impl<S: Schema> GraphDiff<S> {
     pub fn apply(self, graph: impl GraphView<S>) -> Result<(Graph<S>, Vec<NodeId<S>>), Error> {
         let mut graph = graph.into_graph();
         let staged = self.prepare(&mut graph)?;
-        let node_remapper = staged.commit(&mut graph);
+        let node_remapper = staged.commit(&mut graph)?;
         Ok((graph, node_remapper))
     }
 }

@@ -12,6 +12,12 @@ use crate::{
     strings_pool::RawStringId,
 };
 
+pub(crate) fn ranged_slice<T>(v: &[T], range: std::ops::Range<usize>) -> Result<&[T], Error> {
+    let (start, end) = (range.start, range.end);
+    v.get(range)
+        .ok_or_else(|| Error::property_index_out_of_bounds(start, end, v.len()))
+}
+
 #[derive(Debug, Clone)]
 pub enum StoredProperty {
     Bool(bool),
@@ -232,6 +238,32 @@ impl StorageArray {
             (StorageArray::Enum(storage), StorageArray::Enum(v)) => storage.append(v),
             (StorageArray::None, StorageArray::None) => (),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn try_extend_from_range(
+        &mut self,
+        src: &StorageArray,
+        range: std::ops::Range<usize>,
+    ) -> Result<(), Error> {
+        let target_typ = self.typ();
+        let src_typ = src.typ();
+        match (self, src) {
+            (Self::Bool(dst), Self::Bool(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::Byte(dst), Self::Byte(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::Short(dst), Self::Short(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::Int(dst), Self::Int(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::Long(dst), Self::Long(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::Float(dst), Self::Float(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::Double(dst), Self::Double(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::NodeId(dst), Self::NodeId(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::StringId(dst), Self::StringId(v)) => {
+                dst.extend_from_slice(ranged_slice(v, range)?)
+            }
+            (Self::Enum(dst), Self::Enum(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
+            (Self::None, Self::None) => (),
+            _ => return Err(Error::invalid_property_type(target_typ, src_typ)),
         }
         Ok(())
     }

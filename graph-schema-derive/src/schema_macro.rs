@@ -90,11 +90,17 @@ mod tests {
             .parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
             .expect("failed to parse derive list")
             .iter()
-            .map(|p| p.segments.last().unwrap().ident.to_string())
+            .map(|p| {
+                p.segments
+                    .last()
+                    .expect("the path must contain an element")
+                    .ident
+                    .to_string()
+            })
             .collect()
     }
 
-    fn assoc_type<'a>(impl_block: &'a syn::ItemImpl, name: &str) -> &'a syn::Type {
+    fn associated_type<'a>(impl_block: &'a syn::ItemImpl, name: &str) -> &'a syn::Type {
         impl_block
             .items
             .iter()
@@ -109,7 +115,12 @@ mod tests {
         let syn::Type::Path(tp) = ty else {
             panic!("expected a type path")
         };
-        tp.path.segments.last().unwrap().ident.to_string()
+        tp.path
+            .segments
+            .last()
+            .expect("the path must contain an element")
+            .ident
+            .to_string()
     }
 
     #[test]
@@ -193,9 +204,12 @@ mod tests {
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
 
-        assert_eq!(type_name(assoc_type(impl_block, "N")), "SimpleNode");
-        assert_eq!(type_name(assoc_type(impl_block, "E")), "SimpleEdge");
-        assert_eq!(type_name(assoc_type(impl_block, "P")), "SimpleProperty");
+        assert_eq!(type_name(associated_type(impl_block, "N")), "SimpleNode");
+        assert_eq!(type_name(associated_type(impl_block, "E")), "SimpleEdge");
+        assert_eq!(
+            type_name(associated_type(impl_block, "P")),
+            "SimpleProperty"
+        );
     }
 
     #[test]
@@ -204,7 +218,7 @@ mod tests {
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
 
-        assert_eq!(type_name(assoc_type(impl_block, "EPR")), "NoEnumProps");
+        assert_eq!(type_name(associated_type(impl_block, "EPR")), "NoEnumProps");
     }
 
     #[test]
@@ -215,6 +229,9 @@ mod tests {
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
 
-        assert_eq!(type_name(assoc_type(impl_block, "EPR")), "SimpleRegistry");
+        assert_eq!(
+            type_name(associated_type(impl_block, "EPR")),
+            "SimpleRegistry"
+        );
     }
 }

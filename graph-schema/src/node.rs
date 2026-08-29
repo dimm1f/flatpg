@@ -64,7 +64,7 @@ impl Default for NodeMeta {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RawNodeId {
     kind: u32,
     seq: u32,

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
     EdgeDirectionKind, ItemAsStr, ItemIndex,
     edge::Direction,
@@ -21,7 +19,7 @@ use super::{Change, GraphDiff, HalfEdge, NewEdge, NewOrExistingNode, QuantifiedP
 
 impl<S: Schema> GraphDiff<S> {
     pub fn prepare(&self, graph: &mut Graph<S>) -> Result<StagedDiff<S>, Error> {
-        let (staged_removed, node_tombstones, slot_property_updates, slot_edge_removals) =
+        let (mut node_tombstones, slot_property_updates, slot_edge_removals) =
             classify_changes(&self.changes, graph)?;
 
         let property_replacements = prepare_property_updates(
@@ -98,6 +96,16 @@ impl<S: Schema> GraphDiff<S> {
             &property_last_offset,
         )?;
 
+        // Only consulted by the new-edge loop below, so a diff that adds no edges never
+        // pays for it. Sorting `node_tombstones` in place is free: `commit` only iterates
+        // it to set tombstone flags, where order is irrelevant.
+        let staged_removed: &[RawNodeId] = if self.new_edges.is_empty() {
+            &[]
+        } else {
+            node_tombstones.sort_unstable();
+            &node_tombstones
+        };
+
         let resolve_node_ref = |node: &NewOrExistingNode| -> Option<RawNodeId> {
             match node {
                 NewOrExistingNode::New(id) => node_remapper.get(*id).copied(),
@@ -128,7 +136,9 @@ impl<S: Schema> GraphDiff<S> {
                 let kind_index = h.node.kind().index();
                 seq < graph_nodes_max_seq[kind_index]
                     && (node_is_deleted::<S>(&graph.node_meta_storage, h.node)
-                        || staged_removed.contains(&RawNodeId::from(&h.node)))
+                        || staged_removed
+                            .binary_search(&RawNodeId::from(&h.node))
+                            .is_ok())
             }) {
                 continue;
             }
@@ -166,32 +176,20 @@ impl<S: Schema> GraphDiff<S> {
     }
 }
 
-// Staged-removed node set, node tombstones, and the per-slot property-update/edge-removal
-// buckets that `classify_changes` sorts every pending `Change` into.
 type ClassifiedChanges<'a> = (
-    HashSet<RawNodeId>,
     Vec<RawNodeId>,
     SlotBuckets<Option<&'a QuantifiedProperty>>,
     SlotBuckets<Vec<usize>>,
 );
 
 // Buckets every pending `Change` by kind: node tombstones, per-slot property-update
-// pointers, and per-slot local edge-removal seqs. Also returns the set of nodes staged
-// for removal in this same diff — consulted later so a new edge referencing one of them
-// is dropped even though the tombstone itself hasn't been written into `graph` yet (see
-// `StagedDiff::commit`).
+// pointers, and per-slot local edge-removal seqs. `node_tombstones` doubles as the
+// staged-for-removal set the new-edge loop consults: a node is pushed here on exactly
+// the in-range condition that guards that lookup, so it needs no separate collection.
 fn classify_changes<'a, S: Schema>(
     changes: &'a [Change<S>],
     graph: &Graph<S>,
 ) -> Result<ClassifiedChanges<'a>, Error> {
-    let staged_removed: HashSet<RawNodeId> = changes
-        .iter()
-        .filter_map(|change| match change {
-            Change::RemoveNode(node_ref) => Some(*node_ref),
-            _ => None,
-        })
-        .collect();
-
     let mut node_tombstones = Vec::new();
     let mut slot_property_updates: SlotBuckets<Option<&QuantifiedProperty>> =
         SlotBuckets::new(S::property_storage_size());
@@ -276,12 +274,7 @@ fn classify_changes<'a, S: Schema>(
         }
     }
 
-    Ok((
-        staged_removed,
-        node_tombstones,
-        slot_property_updates,
-        slot_edge_removals,
-    ))
+    Ok((node_tombstones, slot_property_updates, slot_edge_removals))
 }
 
 // Searches `node`'s half-edges in `slot_index` for `target`, skipping any local seq already

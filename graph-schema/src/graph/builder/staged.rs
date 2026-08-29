@@ -1,9 +1,13 @@
 use crate::{
     ItemIndex,
+    error::Error,
     graph::Graph,
     node::{NodeId, RawNodeId},
+    property::PropertyType,
     schema::Schema,
-    storage::{NodeMetaStorage, Offset, OffsetStorage, StorageArray},
+    storage::{
+        EdgeStorageSlot, NodeMetaStorage, Offset, OffsetStorage, StorageArray, ranged_slice,
+    },
 };
 
 // One property-storage slot fully rebuilt in place of existing nodes' data
@@ -42,21 +46,6 @@ pub(super) struct EdgeSlotInsert {
     pub(super) offsets: Vec<Offset>,
 }
 
-// Fully-validated, ready-to-write result of `GraphDiff::prepare`. Nothing in
-// `StagedDiff::commit` can fail: every fallible check (`try_push`/`try_append`/
-// `try_splice`, `checked_add_delta`/`checked_sub`/`checked_sub_delta`,
-// `NodeId::try_from`) has already been resolved while building this value, against
-// the graph's pre-mutation state, so `commit` only ever replays already-validated
-// data.
-//
-// That guarantee holds only for the exact `Graph<S>` and state `prepare` built this
-// value against. Calling `commit` on a different `Graph<S>`, or on the same one after
-// something else has already mutated it, is a logic error the type system cannot
-// catch: the offsets and splice positions baked into this value would no longer match
-// the graph's actual layout, and `commit` would replay them anyway — panicking if a
-// position falls outside the current storage, or silently writing misaligned data
-// otherwise. Always commit a `StagedDiff` immediately against the same graph state
-// `prepare` just validated it against, as `GraphDiff::apply` does.
 pub struct StagedDiff<S: Schema> {
     pub(super) new_node_meta: NodeMetaStorage<S>,
     pub(super) node_remapper: Vec<NodeId<S>>,
@@ -68,11 +57,12 @@ pub struct StagedDiff<S: Schema> {
 }
 
 impl<S: Schema> StagedDiff<S> {
-    // Writes every already-validated piece of `self` into `graph`. Cannot fail: every
-    // check that could have failed was already performed by `prepare`. `graph` must
-    // be the same graph, in the same state, that `prepare` built `self` from — see
-    // the `StagedDiff` type doc for what breaks if it isn't.
-    pub fn commit(self, graph: &mut Graph<S>) -> Vec<NodeId<S>> {
+    // Writes every already-validated piece of `self` into `graph`. Every check that
+    // could have failed was already performed by `prepare` — see the `Result` note on
+    // the type doc above. `graph` must be the same graph, in the same state, that
+    // `prepare` built `self` from — see the `StagedDiff` type doc for what breaks if
+    // it isn't.
+    pub fn commit(self, graph: &mut Graph<S>) -> Result<Vec<NodeId<S>>, Error> {
         let StagedDiff {
             mut new_node_meta,
             node_remapper,
@@ -113,25 +103,60 @@ impl<S: Schema> StagedDiff<S> {
         for append in property_appends {
             let slot = &mut graph.property_storage[append.slot_index];
             let mut values_batch = append.values_batch;
-            slot.values_mut()
-                .try_append(&mut values_batch)
-                .expect("type validated in prepare");
+            slot.values_mut().try_append(&mut values_batch)?;
             slot.offsets_mut().extend(append.offsets_tail);
         }
 
         for insert in edge_inserts {
             let slot = &mut graph.edge_storage[insert.slot_index];
-            for (place, neighbors, values) in insert.splices {
-                slot.neighbors_mut().splice(place..place, neighbors);
-                if let Some(values) = values {
-                    slot.values_mut()
-                        .try_splice(place, values)
-                        .expect("type/position validated in prepare");
-                }
+            if !insert.splices.is_empty() {
+                merge_splices(slot, insert.splices)?;
             }
             *slot.offsets_mut() = insert.offsets;
         }
 
-        node_remapper
+        Ok(node_remapper)
     }
+}
+
+fn merge_splices(
+    slot: &mut EdgeStorageSlot,
+    splices: Vec<(usize, Vec<RawNodeId>, Option<StorageArray>)>,
+) -> Result<(), Error> {
+    let inserted: usize = splices.iter().map(|(_, batch, _)| batch.len()).sum();
+
+    let old_neighbors = std::mem::take(slot.neighbors_mut());
+    let mut neighbors = Vec::with_capacity(old_neighbors.len() + inserted);
+
+    let values_typ = slot.values().typ();
+    let has_values = values_typ != PropertyType::None;
+    let old_values = std::mem::take(slot.values_mut());
+    let mut values = StorageArray::with_capacity(values_typ, old_values.len() + inserted);
+
+    let mut copied = 0usize;
+    for (place, batch, batch_values) in splices {
+        // Zero when this batch abuts the previous one, which is every batch when the
+        // slot starts empty (a bulk load into a fresh graph): all `place`s are appends.
+        let take = place - neighbors.len();
+        if take > 0 {
+            neighbors.extend_from_slice(ranged_slice(&old_neighbors, copied..copied + take)?);
+            if has_values {
+                values.try_extend_from_range(&old_values, copied..copied + take)?;
+            }
+            copied += take;
+        }
+
+        neighbors.extend(batch);
+        if let Some(mut batch_values) = batch_values {
+            values.try_append(&mut batch_values)?;
+        }
+    }
+
+    neighbors.extend_from_slice(ranged_slice(&old_neighbors, copied..old_neighbors.len())?);
+    if has_values {
+        values.try_extend_from_range(&old_values, copied..old_values.len())?;
+        *slot.values_mut() = values;
+    }
+    *slot.neighbors_mut() = neighbors;
+    Ok(())
 }
