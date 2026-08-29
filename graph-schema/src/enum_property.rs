@@ -86,3 +86,39 @@ impl EnumPropertyRegistry for NoEnumProps {
         match *self {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_enum_id_round_trips_its_fields() {
+        let id = RawEnumId::new(3, 42);
+        assert_eq!(id.enum_property_index(), 3);
+        assert_eq!(id.variant(), 42);
+    }
+
+    #[test]
+    fn raw_enum_id_display_shows_both_fields() {
+        let id = RawEnumId::new(3, 42);
+        assert_eq!(id.to_string(), "RawEnumId(3,42)");
+    }
+
+    #[test]
+    fn no_enum_props_from_index_is_always_none() {
+        assert_eq!(NoEnumProps::from_index(0), None);
+        assert_eq!(NoEnumProps::from_index(7), None);
+    }
+
+    #[test]
+    fn no_enum_props_all_is_empty() {
+        assert_eq!(NoEnumProps::all(), &[]);
+    }
+
+    #[test]
+    fn no_enum_props_from_str_always_errors() {
+        let err = NoEnumProps::from_str("Anything").unwrap_err();
+        assert!(matches!(err, Error::UnknownLabel { enum_name, label }
+            if enum_name == "NoEnumProps" && label == "Anything"));
+    }
+}

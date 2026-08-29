@@ -260,3 +260,103 @@ impl TryFrom<PropertyValue> for String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn property_type_display_matches_variant_name() {
+        let cases = [
+            (PropertyType::None, "None"),
+            (PropertyType::Bool, "Bool"),
+            (PropertyType::Byte, "Byte"),
+            (PropertyType::Short, "Short"),
+            (PropertyType::Int, "Int"),
+            (PropertyType::Long, "Long"),
+            (PropertyType::Float, "Float"),
+            (PropertyType::Double, "Double"),
+            (PropertyType::NodeId, "NodeId"),
+            (PropertyType::String, "String"),
+            (PropertyType::Enum, "Enum"),
+        ];
+        for (typ, name) in cases {
+            assert_eq!(typ.to_string(), name);
+        }
+    }
+
+    #[test]
+    fn property_type_default_is_none() {
+        assert_eq!(PropertyType::default(), PropertyType::None);
+    }
+
+    #[test]
+    fn property_value_typ_matches_each_variant() {
+        assert_eq!(PropertyValue::Bool(true).typ(), PropertyType::Bool);
+        assert_eq!(PropertyValue::Byte(1).typ(), PropertyType::Byte);
+        assert_eq!(PropertyValue::Short(1).typ(), PropertyType::Short);
+        assert_eq!(PropertyValue::Int(1).typ(), PropertyType::Int);
+        assert_eq!(PropertyValue::Long(1).typ(), PropertyType::Long);
+        assert_eq!(PropertyValue::Float(1.0).typ(), PropertyType::Float);
+        assert_eq!(PropertyValue::Double(1.0).typ(), PropertyType::Double);
+        assert_eq!(
+            PropertyValue::NodeId(RawNodeId::new(0, 0)).typ(),
+            PropertyType::NodeId
+        );
+        assert_eq!(
+            PropertyValue::String("x".into()).typ(),
+            PropertyType::String
+        );
+        assert_eq!(
+            PropertyValue::Enum(RawEnumId::new(0, 0)).typ(),
+            PropertyType::Enum
+        );
+    }
+
+    #[test]
+    fn from_raw_node_id_wraps_in_node_id_variant() {
+        let raw = RawNodeId::new(2, 5);
+        assert!(matches!(PropertyValue::from(raw), PropertyValue::NodeId(v) if v == raw));
+    }
+
+    #[test]
+    fn try_from_property_value_succeeds_for_matching_variant() {
+        assert!(bool::try_from(PropertyValue::Bool(true)).unwrap());
+        assert_eq!(u8::try_from(PropertyValue::Byte(7)).unwrap(), 7);
+        assert_eq!(i16::try_from(PropertyValue::Short(7)).unwrap(), 7);
+        assert_eq!(i32::try_from(PropertyValue::Int(7)).unwrap(), 7);
+        assert_eq!(i64::try_from(PropertyValue::Long(7)).unwrap(), 7);
+        assert_eq!(f32::try_from(PropertyValue::Float(7.0)).unwrap(), 7.0);
+        assert_eq!(f64::try_from(PropertyValue::Double(7.0)).unwrap(), 7.0);
+        let raw = RawNodeId::new(1, 2);
+        assert_eq!(
+            RawNodeId::try_from(PropertyValue::NodeId(raw)).unwrap(),
+            raw
+        );
+        assert_eq!(
+            String::try_from(PropertyValue::String("hi".into())).unwrap(),
+            "hi"
+        );
+    }
+
+    #[test]
+    fn try_from_property_value_fails_for_mismatched_variant() {
+        let mismatched = PropertyValue::String("wrong type".into());
+
+        let err = bool::try_from(mismatched.clone()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidPropertyType { expected, found }
+                if expected == "Bool" && found == "String"
+        ));
+
+        assert!(u8::try_from(mismatched.clone()).is_err());
+        assert!(i16::try_from(mismatched.clone()).is_err());
+        assert!(i32::try_from(mismatched.clone()).is_err());
+        assert!(i64::try_from(mismatched.clone()).is_err());
+        assert!(f32::try_from(mismatched.clone()).is_err());
+        assert!(f64::try_from(mismatched.clone()).is_err());
+        assert!(RawNodeId::try_from(mismatched.clone()).is_err());
+        assert!(String::try_from(PropertyValue::Bool(true)).is_err());
+    }
+}

@@ -856,3 +856,468 @@ impl<'a, S> IntoIterator for &'a PropertyStorage<S> {
         self.storage.iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::mem::discriminant;
+
+    use super::*;
+    use crate::strings_pool::StringsPool;
+
+    fn samples() -> Vec<StoredProperty> {
+        let mut strings = StringsPool::new();
+        vec![
+            StoredProperty::Bool(true),
+            StoredProperty::Byte(7),
+            StoredProperty::Short(7),
+            StoredProperty::Int(7),
+            StoredProperty::Long(7),
+            StoredProperty::Float(7.0),
+            StoredProperty::Double(7.0),
+            StoredProperty::NodeId(RawNodeId::new(1, 2)),
+            StoredProperty::StringId(strings.intern("x")),
+            StoredProperty::Enum(RawEnumId::new(0, 0)),
+        ]
+    }
+
+    #[test]
+    fn stored_property_typ_matches_each_variant() {
+        let expected = [
+            PropertyType::Bool,
+            PropertyType::Byte,
+            PropertyType::Short,
+            PropertyType::Int,
+            PropertyType::Long,
+            PropertyType::Float,
+            PropertyType::Double,
+            PropertyType::NodeId,
+            PropertyType::String,
+            PropertyType::Enum,
+        ];
+        for (sample, typ) in samples().iter().zip(expected) {
+            assert_eq!(sample.typ(), typ);
+        }
+    }
+
+    #[test]
+    fn offset_new_rejects_values_beyond_inner_offset_range() {
+        assert_eq!(Offset::new(5).unwrap().value(), 5);
+        let err = Offset::new(u32::MAX as usize + 1).unwrap_err();
+        assert!(matches!(err, Error::OffsetOverflow(_)));
+    }
+
+    #[test]
+    fn offset_zero_has_zero_value() {
+        assert_eq!(Offset::zero().value(), 0);
+    }
+
+    #[test]
+    fn offset_checked_sub_computes_length_and_rejects_decrease() {
+        let a = Offset::new(5).unwrap();
+        let b = Offset::new(2).unwrap();
+        assert_eq!(a.checked_sub(b).unwrap(), 3);
+        assert!(matches!(
+            b.checked_sub(a).unwrap_err(),
+            Error::OffsetUnderflow
+        ));
+    }
+
+    #[test]
+    fn offset_checked_add_delta_adds_and_rejects_overflow() {
+        let a = Offset::zero();
+        assert_eq!(a.checked_add_delta(5).unwrap().value(), 5);
+        let max = Offset::new(u32::MAX as usize).unwrap();
+        assert!(matches!(
+            max.checked_add_delta(1).unwrap_err(),
+            Error::OffsetOverflow(_)
+        ));
+        assert!(matches!(
+            a.checked_add_delta(u32::MAX as usize + 1).unwrap_err(),
+            Error::OffsetOverflow(_)
+        ));
+    }
+
+    #[test]
+    fn offset_checked_sub_delta_subtracts_and_rejects_underflow() {
+        let a = Offset::new(5).unwrap();
+        assert_eq!(a.checked_sub_delta(2).unwrap().value(), 3);
+        assert!(matches!(
+            Offset::zero().checked_sub_delta(1).unwrap_err(),
+            Error::OffsetUnderflow
+        ));
+    }
+
+    #[test]
+    fn usize_from_offset_ref_matches_value() {
+        let offset = Offset::new(9).unwrap();
+        assert_eq!(usize::from(&offset), 9);
+    }
+
+    #[test]
+    fn storage_array_new_and_with_capacity_match_the_requested_type() {
+        for typ in [
+            PropertyType::None,
+            PropertyType::Bool,
+            PropertyType::Byte,
+            PropertyType::Short,
+            PropertyType::Int,
+            PropertyType::Long,
+            PropertyType::Float,
+            PropertyType::Double,
+            PropertyType::NodeId,
+            PropertyType::String,
+            PropertyType::Enum,
+        ] {
+            assert_eq!(StorageArray::new(typ).typ(), typ);
+            assert_eq!(StorageArray::with_capacity(typ, 4).typ(), typ);
+        }
+    }
+
+    #[test]
+    fn storage_array_none_reports_len_one_and_is_not_empty() {
+        let arr = StorageArray::new(PropertyType::None);
+        assert_eq!(arr.len(), 1);
+        assert!(!arr.is_empty());
+    }
+
+    #[test]
+    fn storage_array_try_push_get_and_len_round_trip_each_type() {
+        for sample in samples() {
+            let mut arr = StorageArray::new(sample.typ());
+            assert!(arr.is_empty());
+            arr.try_push(&sample).unwrap();
+            assert_eq!(arr.len(), 1);
+            assert!(!arr.is_empty());
+            let got = arr.get(0).unwrap();
+            assert_eq!(discriminant(&got), discriminant(&sample));
+            assert!(arr.get(1).is_none());
+        }
+    }
+
+    #[test]
+    fn storage_array_try_push_rejects_mismatched_type() {
+        let mut arr = StorageArray::new(PropertyType::Bool);
+        let err = arr.try_push(&StoredProperty::Int(1)).unwrap_err();
+        assert!(matches!(err, Error::InvalidPropertyType { .. }));
+    }
+
+    #[test]
+    fn storage_array_try_append_moves_elements_out_of_the_source() {
+        for sample in samples() {
+            let mut dst = StorageArray::new(sample.typ());
+            let mut src = StorageArray::new(sample.typ());
+            src.try_push(&sample).unwrap();
+            src.try_push(&sample).unwrap();
+            dst.try_append(&mut src).unwrap();
+            assert_eq!(dst.len(), 2);
+            assert_eq!(src.len(), 0);
+        }
+        let mut none_dst = StorageArray::new(PropertyType::None);
+        let mut none_src = StorageArray::new(PropertyType::None);
+        none_dst.try_append(&mut none_src).unwrap();
+    }
+
+    #[test]
+    fn storage_array_try_append_rejects_mismatched_type() {
+        let mut dst = StorageArray::new(PropertyType::Bool);
+        let mut src = StorageArray::new(PropertyType::Int);
+        let err = dst.try_append(&mut src).unwrap_err();
+        assert!(matches!(err, Error::InvalidPropertyType { .. }));
+    }
+
+    #[test]
+    fn storage_array_try_extend_from_range_copies_a_slice() {
+        for sample in samples() {
+            let mut src = StorageArray::new(sample.typ());
+            for _ in 0..3 {
+                src.try_push(&sample).unwrap();
+            }
+            let mut dst = StorageArray::new(sample.typ());
+            dst.try_extend_from_range(&src, 0..2).unwrap();
+            assert_eq!(dst.len(), 2);
+        }
+    }
+
+    #[test]
+    fn storage_array_try_extend_from_range_rejects_mismatched_type_and_bad_range() {
+        let src = StorageArray::new(PropertyType::Int);
+        let mut bool_dst = StorageArray::new(PropertyType::Bool);
+        assert!(matches!(
+            bool_dst.try_extend_from_range(&src, 0..0).unwrap_err(),
+            Error::InvalidPropertyType { .. }
+        ));
+
+        let mut int_dst = StorageArray::new(PropertyType::Int);
+        assert!(matches!(
+            int_dst.try_extend_from_range(&src, 0..5).unwrap_err(),
+            Error::PropertyIndexOutOfBounds { .. }
+        ));
+
+        let mut none_dst = StorageArray::new(PropertyType::None);
+        let none_src = StorageArray::new(PropertyType::None);
+        none_dst.try_extend_from_range(&none_src, 0..0).unwrap();
+    }
+
+    #[test]
+    fn storage_array_try_splice_inserts_at_the_given_position() {
+        for sample in samples() {
+            let mut arr = StorageArray::new(sample.typ());
+            arr.try_push(&sample).unwrap();
+            arr.try_push(&sample).unwrap();
+            let mut middle = StorageArray::new(sample.typ());
+            middle.try_push(&sample).unwrap();
+            arr.try_splice(1, middle).unwrap();
+            assert_eq!(arr.len(), 3);
+        }
+    }
+
+    #[test]
+    fn storage_array_try_splice_rejects_mismatched_type() {
+        let mut dst = StorageArray::new(PropertyType::Bool);
+        let src = StorageArray::new(PropertyType::Int);
+        let err = dst.try_splice(0, src).unwrap_err();
+        assert!(matches!(err, Error::InvalidPropertyType { .. }));
+    }
+
+    #[test]
+    fn storage_array_try_insert_places_the_value_at_the_given_index() {
+        for sample in samples() {
+            let mut arr = StorageArray::new(sample.typ());
+            arr.try_push(&sample).unwrap();
+            arr.try_insert(0, &sample).unwrap();
+            assert_eq!(arr.len(), 2);
+        }
+    }
+
+    #[test]
+    fn storage_array_try_insert_rejects_mismatched_type() {
+        let mut arr = StorageArray::new(PropertyType::Bool);
+        let err = arr.try_insert(0, &StoredProperty::Int(1)).unwrap_err();
+        assert!(matches!(err, Error::InvalidPropertyType { .. }));
+    }
+
+    #[test]
+    fn storage_array_try_drain_removes_the_given_range() {
+        for sample in samples() {
+            let mut arr = StorageArray::new(sample.typ());
+            for _ in 0..3 {
+                arr.try_push(&sample).unwrap();
+            }
+            arr.try_drain(0..2).unwrap();
+            assert_eq!(arr.len(), 1);
+        }
+        let mut none_arr = StorageArray::new(PropertyType::None);
+        none_arr.try_drain(0..0).unwrap();
+    }
+
+    #[test]
+    fn storage_array_iter_range_yields_the_requested_slice_and_empty_past_the_end() {
+        for sample in samples() {
+            let mut arr = StorageArray::new(sample.typ());
+            for _ in 0..3 {
+                arr.try_push(&sample).unwrap();
+            }
+            assert_eq!(arr.iter_range(0..2).count(), 2);
+            assert_eq!(arr.iter_range(10..20).count(), 0);
+        }
+    }
+
+    #[test]
+    fn storage_array_iter_range_over_none_is_always_empty() {
+        let arr = StorageArray::new(PropertyType::None);
+        let mut iter = arr.iter_range(0..5);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn storage_array_try_as_succeeds_for_matching_type_and_fails_otherwise() {
+        let mismatch = StorageArray::new(PropertyType::None);
+
+        let mut bool_arr = StorageArray::new(PropertyType::Bool);
+        bool_arr.try_push(&StoredProperty::Bool(true)).unwrap();
+        assert_eq!(bool_arr.try_as_bool().unwrap(), &vec![true]);
+        assert_eq!(bool_arr.try_as_bool_mut().unwrap(), &mut vec![true]);
+        assert!(mismatch.try_as_bool().is_err());
+        assert!(
+            StorageArray::new(PropertyType::Bool)
+                .try_as_bool_mut()
+                .is_ok()
+        );
+        assert!(mismatch.clone().try_as_bool_mut().is_err());
+
+        let mut byte_arr = StorageArray::new(PropertyType::Byte);
+        byte_arr.try_push(&StoredProperty::Byte(7)).unwrap();
+        assert_eq!(byte_arr.try_as_byte().unwrap(), &vec![7]);
+        assert_eq!(byte_arr.try_as_byte_mut().unwrap(), &mut vec![7]);
+        assert!(mismatch.try_as_byte().is_err());
+        assert!(mismatch.clone().try_as_byte_mut().is_err());
+
+        let mut short_arr = StorageArray::new(PropertyType::Short);
+        short_arr.try_push(&StoredProperty::Short(7)).unwrap();
+        assert_eq!(short_arr.try_as_short().unwrap(), &vec![7]);
+        assert_eq!(short_arr.try_as_short_mut().unwrap(), &mut vec![7]);
+        assert!(mismatch.try_as_short().is_err());
+        assert!(mismatch.clone().try_as_short_mut().is_err());
+
+        let mut int_arr = StorageArray::new(PropertyType::Int);
+        int_arr.try_push(&StoredProperty::Int(7)).unwrap();
+        assert_eq!(int_arr.try_as_int().unwrap(), &vec![7]);
+        assert_eq!(int_arr.try_as_int_mut().unwrap(), &mut vec![7]);
+        assert!(mismatch.try_as_int().is_err());
+        assert!(mismatch.clone().try_as_int_mut().is_err());
+
+        let mut long_arr = StorageArray::new(PropertyType::Long);
+        long_arr.try_push(&StoredProperty::Long(7)).unwrap();
+        assert_eq!(long_arr.try_as_long().unwrap(), &vec![7]);
+        assert_eq!(long_arr.try_as_long_mut().unwrap(), &mut vec![7]);
+        assert!(mismatch.try_as_long().is_err());
+        assert!(mismatch.clone().try_as_long_mut().is_err());
+
+        let mut float_arr = StorageArray::new(PropertyType::Float);
+        float_arr.try_push(&StoredProperty::Float(7.0)).unwrap();
+        assert_eq!(float_arr.try_as_float().unwrap(), &vec![7.0]);
+        assert_eq!(float_arr.try_as_float_mut().unwrap(), &mut vec![7.0]);
+        assert!(mismatch.try_as_float().is_err());
+        assert!(mismatch.clone().try_as_float_mut().is_err());
+
+        let mut double_arr = StorageArray::new(PropertyType::Double);
+        double_arr.try_push(&StoredProperty::Double(7.0)).unwrap();
+        assert_eq!(double_arr.try_as_double().unwrap(), &vec![7.0]);
+        assert_eq!(double_arr.try_as_double_mut().unwrap(), &mut vec![7.0]);
+        assert!(mismatch.try_as_double().is_err());
+        assert!(mismatch.clone().try_as_double_mut().is_err());
+
+        let raw_node = RawNodeId::new(1, 2);
+        let mut node_arr = StorageArray::new(PropertyType::NodeId);
+        node_arr
+            .try_push(&StoredProperty::NodeId(raw_node))
+            .unwrap();
+        assert_eq!(node_arr.try_as_node_id().unwrap(), &vec![raw_node]);
+        assert_eq!(node_arr.try_as_node_id_mut().unwrap(), &mut vec![raw_node]);
+        assert!(mismatch.try_as_node_id().is_err());
+        assert!(mismatch.clone().try_as_node_id_mut().is_err());
+
+        let raw_enum = RawEnumId::new(0, 0);
+        let mut enum_arr = StorageArray::new(PropertyType::Enum);
+        enum_arr.try_push(&StoredProperty::Enum(raw_enum)).unwrap();
+        assert_eq!(enum_arr.try_as_enum().unwrap(), &vec![raw_enum]);
+        assert_eq!(enum_arr.try_as_enum_mut().unwrap(), &mut vec![raw_enum]);
+        assert!(mismatch.try_as_enum().is_err());
+        assert!(mismatch.clone().try_as_enum_mut().is_err());
+
+        let mut strings = StringsPool::new();
+        let raw_string = strings.intern("x");
+        let mut string_arr = StorageArray::new(PropertyType::String);
+        string_arr
+            .try_push(&StoredProperty::StringId(raw_string))
+            .unwrap();
+        assert_eq!(string_arr.try_as_string().unwrap(), &vec![raw_string]);
+        assert_eq!(
+            string_arr.try_as_string_mut().unwrap(),
+            &mut vec![raw_string]
+        );
+        assert!(mismatch.try_as_string().is_err());
+        assert!(mismatch.clone().try_as_string_mut().is_err());
+    }
+
+    #[test]
+    fn storage_array_try_into_converts_ownership_and_fails_otherwise() {
+        let mut bool_arr = StorageArray::new(PropertyType::Bool);
+        bool_arr.try_push(&StoredProperty::Bool(true)).unwrap();
+        assert_eq!(bool_arr.try_into_bool().unwrap(), vec![true]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_bool()
+                .is_err()
+        );
+
+        let mut byte_arr = StorageArray::new(PropertyType::Byte);
+        byte_arr.try_push(&StoredProperty::Byte(7)).unwrap();
+        assert_eq!(byte_arr.try_into_byte().unwrap(), vec![7]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_byte()
+                .is_err()
+        );
+
+        let mut short_arr = StorageArray::new(PropertyType::Short);
+        short_arr.try_push(&StoredProperty::Short(7)).unwrap();
+        assert_eq!(short_arr.try_into_short().unwrap(), vec![7]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_short()
+                .is_err()
+        );
+
+        let mut int_arr = StorageArray::new(PropertyType::Int);
+        int_arr.try_push(&StoredProperty::Int(7)).unwrap();
+        assert_eq!(int_arr.try_into_int().unwrap(), vec![7]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_int()
+                .is_err()
+        );
+
+        let mut long_arr = StorageArray::new(PropertyType::Long);
+        long_arr.try_push(&StoredProperty::Long(7)).unwrap();
+        assert_eq!(long_arr.try_into_long().unwrap(), vec![7]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_long()
+                .is_err()
+        );
+
+        let mut float_arr = StorageArray::new(PropertyType::Float);
+        float_arr.try_push(&StoredProperty::Float(7.0)).unwrap();
+        assert_eq!(float_arr.try_into_float().unwrap(), vec![7.0]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_float()
+                .is_err()
+        );
+
+        let mut double_arr = StorageArray::new(PropertyType::Double);
+        double_arr.try_push(&StoredProperty::Double(7.0)).unwrap();
+        assert_eq!(double_arr.try_into_double().unwrap(), vec![7.0]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_double()
+                .is_err()
+        );
+
+        let raw_node = RawNodeId::new(1, 2);
+        let mut node_arr = StorageArray::new(PropertyType::NodeId);
+        node_arr
+            .try_push(&StoredProperty::NodeId(raw_node))
+            .unwrap();
+        assert_eq!(node_arr.try_into_node_id().unwrap(), vec![raw_node]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_node_id()
+                .is_err()
+        );
+
+        let raw_enum = RawEnumId::new(0, 0);
+        let mut enum_arr = StorageArray::new(PropertyType::Enum);
+        enum_arr.try_push(&StoredProperty::Enum(raw_enum)).unwrap();
+        assert_eq!(enum_arr.try_into_enum().unwrap(), vec![raw_enum]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_enum()
+                .is_err()
+        );
+
+        let mut strings = StringsPool::new();
+        let raw_string = strings.intern("x");
+        let mut string_arr = StorageArray::new(PropertyType::String);
+        string_arr
+            .try_push(&StoredProperty::StringId(raw_string))
+            .unwrap();
+        assert_eq!(string_arr.try_into_string().unwrap(), vec![raw_string]);
+        assert!(
+            StorageArray::new(PropertyType::None)
+                .try_into_string()
+                .is_err()
+        );
+    }
+}

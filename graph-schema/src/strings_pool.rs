@@ -57,3 +57,45 @@ impl StringsPool {
         self.entries.get(string_id.0 as usize).cloned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_string_id_display_shows_the_index() {
+        let mut pool = StringsPool::new();
+        let id = pool.intern("hello");
+        assert_eq!(id.to_string(), "RawStringId(0)");
+    }
+
+    #[test]
+    fn intern_deduplicates_equal_strings() {
+        let mut pool = StringsPool::new();
+        let a = pool.intern("hello");
+        let b = pool.intern("hello");
+        let c = pool.intern("world");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn get_resolves_an_interned_string_and_none_for_a_foreign_id() {
+        let mut pool = StringsPool::new();
+        let id = pool.intern("hello");
+        assert_eq!(pool.get(id), Some("hello"));
+
+        let other_pool = StringsPool::new();
+        assert_eq!(other_pool.get(id), None);
+    }
+
+    #[test]
+    fn get_arc_resolves_an_interned_string_and_none_for_a_foreign_id() {
+        let mut pool = StringsPool::new();
+        let id = pool.intern("hello");
+        assert_eq!(pool.get_arc(id).as_deref(), Some("hello"));
+
+        let other_pool = StringsPool::new();
+        assert_eq!(other_pool.get_arc(id), None);
+    }
+}

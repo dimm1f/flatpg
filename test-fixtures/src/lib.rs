@@ -1,6 +1,6 @@
 //! Shared `Schema` fixture used by flatpg's integration tests and benchmarks.
 //!
-//! Ported from `tests/graph_tests.rs` so both `tests/*.rs` and `benches/*.rs`
+//! Ported from `tests/graph_tests/` so both `tests/*.rs` and `benches/*.rs`
 //! (each its own compilation unit) can depend on the same definitions instead
 //! of duplicating them.
 

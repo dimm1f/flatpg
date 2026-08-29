@@ -385,4 +385,4 @@ assert_eq!(
 
 See [`examples/simple_graph.rs`](examples/simple_graph.rs) for a full, runnable version. It also shows a
 cross-diff edge made via `RawNodeId`, and an edge that carries a property. See
-[`tests/graph_tests.rs`](tests/graph_tests.rs) for more on querying, updating, and removing nodes and edges.
+[`tests/graph_tests/`](tests/graph_tests/) for more on querying, updating, and removing nodes and edges.
