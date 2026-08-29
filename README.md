@@ -23,7 +23,7 @@ A few notable points about the model:
 
 ## Public API
 
-All items below are exposed directly by the `flatpg` crate. `flatpg::prelude::*` imports the derive macros and core traits. The modules `flatpg::{edge, enum_property, error, graph, node, property, schema, storage}` re-export the remaining `graph-schema` modules.
+All items below are exposed directly by the `flatpg` crate. `flatpg::prelude::*` imports the derive macros and core traits. The modules `flatpg::{edge, enum_property, error, graph, node, property, schema, storage, strings_pool}` re-export the remaining `graph-schema` modules.
 
 The snippets below are excerpts adapted from [`examples/simple_graph.rs`](examples/simple_graph.rs) — see that file for the full, runnable program.
 
@@ -50,6 +50,8 @@ enum SimpleProperty {
 ```
 
 Each variant needs a `#[property(typ = ..., quantity = One | Multi)]` attribute (see [Properties](#properties) below for the full list of supported `typ`s). The derive generates one same-named accessor trait per variant: here, a `Key` trait with a `key()` method, and a `Values` trait with a `values()` method. `One` quantity returns a bare value (`key() -> Result<&str, Error>`); `Multi` returns a `Vec` (`values() -> Result<Vec<&str>, Error>`). `Count` and `Ref` follow the same `One` pattern, generating `count()` and `r#ref()` methods. These traits are what let a generated node struct expose `.key()`/`.values()`/`.count()`/`.r#ref()` later on.
+
+A variant can also take `rename = ...`, e.g. `#[property(typ = String, quantity = One, rename = Label)]`. This overrides only the string label used by the generated `ItemAsStr`/`ItemFromStr` impls (`.as_str()` and `.parse()`) — the Rust variant name, and the accessor method derived from it, are unaffected. It's useful when the property needs a Rust-identifier-safe variant name (e.g. avoiding a keyword) but a different serialized/display label.
 
 #### `NodeItemKind`
 
