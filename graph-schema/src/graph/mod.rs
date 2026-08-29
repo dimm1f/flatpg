@@ -241,11 +241,8 @@ impl<S: Schema> GraphView<S> for Graph<S> {
 }
 
 fn node_is_deleted<S: Schema>(nodes: &NodeMetaStorage<S>, node_ref: NodeId<S>) -> bool {
-    S::node_kind_by_index(node_ref.kind().index())
-        .and_then(|kind| {
-            nodes[kind.index()]
-                .get(node_ref.seq())
-                .map(NodeMeta::is_deleted)
-        })
+    nodes[node_ref.kind().index()]
+        .get(node_ref.seq())
+        .map(NodeMeta::is_deleted)
         .unwrap_or(true)
 }

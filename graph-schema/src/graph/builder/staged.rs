@@ -36,13 +36,11 @@ pub(super) struct EdgeSlotReplace {
     pub(super) offsets: Vec<Offset>,
 }
 
-// One edge-storage slot's insertion batches for new edges, one entry per touched
-// node-seq, precomputed in ascending `place` order. Commit replays `splice`/
-// `try_splice` — proven infallible by the checks already performed while this
-// record was built.
 pub(super) struct EdgeSlotInsert {
     pub(super) slot_index: usize,
-    pub(super) splices: Vec<(usize, Vec<RawNodeId>, Option<StorageArray>)>,
+    pub(super) neighbors: Vec<RawNodeId>,
+    pub(super) values: StorageArray,
+    pub(super) batches: Vec<(usize, usize)>,
     pub(super) offsets: Vec<Offset>,
 }
 
@@ -109,8 +107,8 @@ impl<S: Schema> StagedDiff<S> {
 
         for insert in edge_inserts {
             let slot = &mut graph.edge_storage[insert.slot_index];
-            if !insert.splices.is_empty() {
-                merge_splices(slot, insert.splices)?;
+            if !insert.batches.is_empty() {
+                merge_edge_batches(slot, &insert.batches, insert.neighbors, insert.values)?;
             }
             *slot.offsets_mut() = insert.offsets;
         }
@@ -119,25 +117,41 @@ impl<S: Schema> StagedDiff<S> {
     }
 }
 
-fn merge_splices(
+// Rebuilds `slot`'s arrays in one pass, alternating runs copied from the old ones with
+// runs taken from the batch arrays. Splicing each batch in separately would cost O(tail)
+// apiece, so a slot receiving k batches would move O(k * slot size) elements — the same
+// quadratic `prepare_property_updates` and `prepare_edge_removals` are written to avoid.
+fn merge_edge_batches(
     slot: &mut EdgeStorageSlot,
-    splices: Vec<(usize, Vec<RawNodeId>, Option<StorageArray>)>,
+    batches: &[(usize, usize)],
+    batch_neighbors: Vec<RawNodeId>,
+    batch_values: StorageArray,
 ) -> Result<(), Error> {
-    let inserted: usize = splices.iter().map(|(_, batch, _)| batch.len()).sum();
+    let inserted = batch_neighbors.len();
 
     let old_neighbors = std::mem::take(slot.neighbors_mut());
-    let mut neighbors = Vec::with_capacity(old_neighbors.len() + inserted);
-
     let values_typ = slot.values().typ();
     let has_values = values_typ != PropertyType::None;
     let old_values = std::mem::take(slot.values_mut());
-    let mut values = StorageArray::with_capacity(values_typ, old_values.len() + inserted);
+
+    if old_neighbors.is_empty() {
+        *slot.neighbors_mut() = batch_neighbors;
+        if has_values {
+            *slot.values_mut() = batch_values;
+        }
+        return Ok(());
+    }
+
+    let mut neighbors = Vec::with_capacity(old_neighbors.len() + inserted);
+    let mut values = StorageArray::with_capacity(values_typ, old_neighbors.len() + inserted);
 
     let mut copied = 0usize;
-    for (place, batch, batch_values) in splices {
-        // Zero when this batch abuts the previous one, which is every batch when the
-        // slot starts empty (a bulk load into a fresh graph): all `place`s are appends.
-        let take = place - neighbors.len();
+    let mut taken = 0usize;
+    for &(place, count) in batches {
+        // Zero when this batch abuts the previous one.
+        let take = place
+            .checked_sub(neighbors.len())
+            .ok_or_else(Error::offset_underflow)?;
         if take > 0 {
             neighbors.extend_from_slice(ranged_slice(&old_neighbors, copied..copied + take)?);
             if has_values {
@@ -146,15 +160,16 @@ fn merge_splices(
             copied += take;
         }
 
-        neighbors.extend(batch);
-        if let Some(mut batch_values) = batch_values {
-            values.try_append(&mut batch_values)?;
+        neighbors.extend_from_slice(ranged_slice(&batch_neighbors, taken..taken + count)?);
+        if has_values {
+            values.try_extend_from_range(&batch_values, taken..taken + count)?;
         }
+        taken += count;
     }
 
     neighbors.extend_from_slice(ranged_slice(&old_neighbors, copied..old_neighbors.len())?);
     if has_values {
-        values.try_extend_from_range(&old_values, copied..old_values.len())?;
+        values.try_extend_from_range(&old_values, copied..old_neighbors.len())?;
         *slot.values_mut() = values;
     }
     *slot.neighbors_mut() = neighbors;

@@ -4,13 +4,13 @@ use crate::{
     node::RawNodeId,
     property::{PropertyType, PropertyValue},
     schema::Schema,
-    storage::{EdgeStorage, Offset, OffsetStorage, PropertyStorage, StorageArray},
+    storage::{EdgeStorage, Offset, OffsetStorage, PropertyStorage, StorageArray, StoredProperty},
     strings_pool::StringsPool,
 };
 
-use super::convert::stored_property_batch;
+use super::QuantifiedProperty;
+use super::convert::to_stored_property;
 use super::staged::{EdgeSlotInsert, EdgeSlotReplace, PropertySlotAppend, PropertySlotReplace};
-use super::{HalfEdge, QuantifiedProperty};
 
 pub(super) struct SlotBuckets<T>(Vec<Option<Vec<T>>>);
 
@@ -34,28 +34,53 @@ impl<T: Default> SlotBuckets<T> {
     }
 }
 
-// Converts `props` to stored form, appends the batch to `values`, and returns `cumulative`
-// advanced by the batch's length. Shared by the two call sites below that both rebuild a
-// slot's `values` array while tracking a running offset alongside it.
+pub(super) struct SlotHalfEdge {
+    pub(super) seq: usize,
+    pub(super) neighbor: RawNodeId,
+    pub(super) property: Option<StoredProperty>,
+}
+
+struct SlotHalfEdges {
+    halves: Vec<SlotHalfEdge>,
+    counts: Vec<u32>,
+}
+
+pub(super) struct EdgeHalfBuckets(Vec<Option<SlotHalfEdges>>);
+
+impl EdgeHalfBuckets {
+    pub(super) fn new(slot_count: usize) -> Self {
+        Self((0..slot_count).map(|_| None).collect())
+    }
+
+    pub(super) fn push(&mut self, slot_index: usize, node_count: usize, half: SlotHalfEdge) {
+        let entry = self.0[slot_index].get_or_insert_with(|| SlotHalfEdges {
+            halves: Vec::new(),
+            counts: vec![0; node_count],
+        });
+        entry.counts[half.seq] += 1;
+        entry.halves.push(half);
+    }
+
+    fn take(&mut self, slot_index: usize) -> Option<SlotHalfEdges> {
+        self.0[slot_index].take()
+    }
+}
+
+// Converts `props` straight into `values` and returns `cumulative` advanced by the number
+// of properties. Shared by the two call sites below that both rebuild a slot's `values`
+// array while tracking a running offset alongside it.
 fn append_property_batch(
     values: &mut StorageArray,
     cumulative: Offset,
     props: &[PropertyValue],
-    typ: PropertyType,
     strings: &mut StringsPool,
 ) -> Result<Offset, Error> {
-    let mut batch = stored_property_batch(props, typ, strings)?;
-    let cumulative = cumulative.checked_add_delta(batch.len())?;
-    values.try_append(&mut batch)?;
-    Ok(cumulative)
+    for prop in props {
+        values.try_push(&to_stored_property(prop, strings))?;
+    }
+    cumulative.checked_add_delta(props.len())
 }
 
-// Prepares every pending `UpdateNodeProperty` for one slot by rebuilding its `values`
-// array in a single pass — copying each untouched node's existing span across and
-// substituting each touched node's new batch — instead of draining and splicing the
-// shared array once per touched node, which would cost O(suffix length) per node and
-// reintroduce this rewrite's target complexity (O(n·k) for k touched nodes in an
-// n-node slot). Reads `property_storage`'s pre-diff state only; performs no mutation.
 pub(super) fn prepare_property_updates<S: Schema>(
     property_storage: &PropertyStorage<S>,
     strings: &mut StringsPool,
@@ -92,13 +117,7 @@ pub(super) fn prepare_property_updates<S: Schema>(
                     QuantifiedProperty::One(p) => std::slice::from_ref(p),
                     QuantifiedProperty::Multi(ps) => ps.as_slice(),
                 };
-                append_property_batch(
-                    &mut new_values,
-                    cumulative,
-                    new_node_values,
-                    property_type,
-                    strings,
-                )?
+                append_property_batch(&mut new_values, cumulative, new_node_values, strings)?
             } else {
                 for prop in slot
                     .values()
@@ -121,12 +140,6 @@ pub(super) fn prepare_property_updates<S: Schema>(
     Ok(replacements)
 }
 
-// Prepares every pending `RemoveEdge` half in one pass per touched slot: local seqs
-// are first converted to absolute positions against the slot's original (pre-diff)
-// offsets, then `neighbors`/`values` are rebuilt by filtering out those positions in
-// a single O(slot size) pass, and offsets are shifted by a cumulative "removed so
-// far" count in a second pass. Reads `edge_storage`'s pre-diff state only; performs
-// no mutation.
 pub(super) fn prepare_edge_removals<S: Schema>(
     edge_storage: &EdgeStorage<S>,
     mut pending: SlotBuckets<Vec<usize>>,
@@ -204,12 +217,6 @@ pub(super) fn prepare_edge_removals<S: Schema>(
     Ok(replacements)
 }
 
-// Prepares the property/offset append batch for every property slot touched by
-// brand-new nodes. `property_last_offset[slot_index]`, when set, means this slot was
-// also rebuilt by `prepare_property_updates` in the same diff — its final offset is
-// used as the starting point here instead of `property_storage`'s pre-diff state, so
-// the append lands after whatever `commit` will have already written for that slot's
-// existing nodes (see coupling note in `GraphDiff::prepare`).
 pub(super) fn prepare_new_node_properties<S: Schema>(
     property_storage: &PropertyStorage<S>,
     strings: &mut StringsPool,
@@ -259,16 +266,10 @@ pub(super) fn prepare_new_node_properties<S: Schema>(
             None => slot.offsets().last().copied().unwrap_or_else(Offset::zero),
         };
 
-        let mut values_batch = StorageArray::with_capacity(slot.values().typ(), 0);
+        let mut values_batch = StorageArray::with_capacity(slot.values().typ(), nodes_count);
         for local_index in 0..nodes_count {
             if let Some(props) = seq_property.get(local_index).copied().flatten() {
-                cumulative = append_property_batch(
-                    &mut values_batch,
-                    cumulative,
-                    props,
-                    slot.values().typ(),
-                    strings,
-                )?;
+                cumulative = append_property_batch(&mut values_batch, cumulative, props, strings)?;
             }
             offsets_tail.push(cumulative);
         }
@@ -282,17 +283,11 @@ pub(super) fn prepare_new_node_properties<S: Schema>(
     Ok(appends)
 }
 
-// Prepares the neighbor/value/offset insertion for every edge slot touched by a new
-// edge (connecting any combination of new and existing nodes) or by new nodes needing
-// degree-0 offset placeholders. `edge_offsets_baseline[slot_index]`, when set, means
-// this slot was also rebuilt by `prepare_edge_removals` in the same diff — its final
-// offsets are used as the starting point here instead of `edge_storage`'s pre-diff
-// state (same coupling reason as `prepare_new_node_properties`).
 pub(super) fn prepare_new_edges<S: Schema>(
     edge_storage: &EdgeStorage<S>,
     graph_nodes_max_seq: &[usize],
     new_nodes_count: &[usize],
-    mut slot_edge_halves: SlotBuckets<Vec<HalfEdge<S>>>,
+    mut slot_edge_halves: EdgeHalfBuckets,
     edge_offsets_baseline: &[Option<&Vec<Offset>>],
 ) -> Result<Vec<EdgeSlotInsert>, Error> {
     let mut inserts = Vec::new();
@@ -325,49 +320,84 @@ pub(super) fn prepare_new_edges<S: Schema>(
         let Some(seq_halves) = seq_halves else {
             inserts.push(EdgeSlotInsert {
                 slot_index,
-                splices: Vec::new(),
+                neighbors: Vec::new(),
+                values: StorageArray::with_capacity(slot.values().typ(), 0),
+                batches: Vec::new(),
                 offsets,
             });
             continue;
         };
 
-        let mut splices = Vec::new();
-        let mut delta = 0usize;
+        let SlotHalfEdges { halves, mut counts } = seq_halves;
+        let property_type = slot.values().typ();
+        let has_values = property_type != PropertyType::None;
+        debug_assert_eq!(counts.len(), offsets.len() - 1);
 
-        #[allow(clippy::needless_range_loop)]
-        for end in 1..offsets.len() {
-            let start = end - 1;
+        // Guards every `as u32` below: the histogram and its prefix sums are all bounded
+        // by the total number of halves.
+        u32::try_from(halves.len()).map_err(|_| Error::offset_overflow(halves.len()))?;
 
-            let halves = &seq_halves[start];
-            if !halves.is_empty() {
-                let neighbors: Vec<RawNodeId> = halves
-                    .iter()
-                    .map(|h| RawNodeId::from(&h.neighbor))
-                    .collect();
-                let place = offsets[end].value() + delta;
-                delta += halves.len();
-
-                let property_type = slot.values().typ();
-                let values = if property_type != PropertyType::None {
-                    let mut batch = StorageArray::with_capacity(property_type, halves.len());
-                    for half in halves.iter() {
-                        if let Some(prop) = &half.property {
-                            batch.try_push(prop)?;
-                        }
-                    }
-                    Some(batch)
-                } else {
-                    None
-                };
-                splices.push((place, neighbors, values));
+        let mut acc = 0u32;
+        let mut touched = 0usize;
+        for count in counts.iter_mut() {
+            let degree = *count;
+            if degree > 0 {
+                touched += 1;
             }
-
-            offsets[end] = offsets[end].checked_add_delta(delta)?;
+            *count = acc;
+            acc += degree;
         }
+
+        let mut order = vec![0u32; halves.len()];
+        for (i, half) in halves.iter().enumerate() {
+            let cursor = &mut counts[half.seq];
+            order[*cursor as usize] = i as u32;
+            *cursor += 1;
+        }
+
+        let mut neighbors: Vec<RawNodeId> = Vec::with_capacity(halves.len());
+        let mut values = StorageArray::with_capacity(property_type, halves.len());
+        for &i in &order {
+            let half = &halves[i as usize];
+            neighbors.push(half.neighbor);
+            match (&half.property, has_values) {
+                (Some(prop), true) => values.try_push(prop)?,
+                // A half with no property must not be skipped: it counts as a neighbor
+                // either way, so skipping would leave `values` shorter than `neighbors`
+                // and shift every later edge's property onto the wrong edge.
+                (None, true) => {
+                    return Err(Error::invalid_property_type(
+                        property_type,
+                        PropertyType::None,
+                    ));
+                }
+                // The mirror: this slot stores nothing, so a supplied property would be
+                // silently dropped rather than stored.
+                (Some(prop), false) => {
+                    return Err(Error::invalid_property_type(PropertyType::None, prop.typ()));
+                }
+                (None, false) => {}
+            }
+        }
+
+        let mut batches: Vec<(usize, usize)> = Vec::with_capacity(touched);
+        let mut prev_end = 0usize;
+        for (count, offset) in counts.iter().zip(offsets.iter_mut().skip(1)) {
+            let run_end = *count as usize;
+            if run_end > prev_end {
+                batches.push((offset.value() + prev_end, run_end - prev_end));
+            }
+            *offset = offset.checked_add_delta(run_end)?;
+            prev_end = run_end;
+        }
+
+        debug_assert_eq!(prev_end, neighbors.len());
 
         inserts.push(EdgeSlotInsert {
             slot_index,
-            splices,
+            neighbors,
+            values,
+            batches,
             offsets,
         });
     }

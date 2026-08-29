@@ -218,7 +218,6 @@ fn stored_node_edge_accessors_return_incident_edges() {
     src_seqs.sort_unstable();
     assert_eq!(src_seqs, vec![0, 1]);
 
-    // The opposite halves carry no edges.
     assert!(
         alpha0
             .get_edges_in(TestEdge::Labeled)
@@ -845,6 +844,60 @@ fn add_edge_from_new_node_to_existing_node_in_middle_of_seq_range() {
     );
 }
 
+/// Locks in a fix for silent corruption: a missing property on a property-carrying
+/// edge kind used to be skipped while the neighbor still counted toward the slot's
+/// offsets, leaving `values` shorter than `neighbors` and shifting every later edge's
+/// property onto the wrong edge.
+#[test]
+fn add_edge_without_property_for_property_carrying_kind_is_rejected() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
+    diff.add_edge(alpha_id, beta_id, TestEdge::Labeled, None);
+
+    let err = diff.apply(Graph::new()).err().expect("expected an error");
+    assert!(matches!(err, Error::InvalidPropertyType { .. }));
+}
+
+/// Companion to the above: the corruption only became observable once a later edge in
+/// the same slot carried a property, so the mixed case is the one that silently
+/// returned another edge's value.
+#[test]
+fn add_edge_mixing_present_and_missing_properties_is_rejected() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha0 = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let alpha1 = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
+    diff.add_edge(alpha0, beta_id, TestEdge::Labeled, None);
+    diff.add_edge(
+        alpha1,
+        beta_id,
+        TestEdge::Labeled,
+        Some(PropertyValue::String("p1".into())),
+    );
+
+    let err = diff.apply(Graph::new()).err().expect("expected an error");
+    assert!(matches!(err, Error::InvalidPropertyType { .. }));
+}
+
+/// The mirror of the two cases above: an edge kind that stores no property would
+/// silently discard one, so supplying it is rejected rather than ignored.
+#[test]
+fn add_edge_with_property_for_propertyless_kind_is_rejected() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
+    diff.add_edge(
+        alpha_id,
+        beta_id,
+        TestEdge::Plain,
+        Some(PropertyValue::String("dropped".into())),
+    );
+
+    let err = diff.apply(Graph::new()).err().expect("expected an error");
+    assert!(matches!(err, Error::InvalidPropertyType { .. }));
+}
+
 #[test]
 fn add_edge_with_property_stores_property() {
     let mut diff = GraphDiff::<TestSchema>::default();
@@ -876,6 +929,212 @@ fn add_edge_with_property_stores_property() {
         .expect("edge property lookup")
         .expect("edge property should be set");
     assert_eq!(string_value(&graph, property), "x");
+}
+
+/// Regression test for a panic: `add_edge` accepted a `RawNodeId` built with a valid
+/// node kind but a seq that was never created (neither an existing node nor one of this
+/// diff's own new nodes), and `prepare` indexed a per-slot histogram sized to the real
+/// node count with that seq directly, panicking instead of erroring or dropping the
+/// edge the way every other bad-reference case in this file does.
+#[test]
+fn add_edge_to_node_seq_never_created_is_dropped() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let phantom = RawNodeId::new(TestNode::Alpha.index(), 9999);
+    diff.add_edge(alpha_id, phantom, TestEdge::Plain, None);
+
+    let (graph, ids) = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
+    assert_eq!(
+        graph
+            .get_edges_count(
+                RawNodeId::from(&ids[alpha_id]),
+                TestEdge::Plain,
+                Direction::Out
+            )
+            .expect("out edges count"),
+        0
+    );
+}
+
+/// Companion to the above: a `RawNodeId` with a kind index that doesn't name any
+/// registered node kind at all is the other flavor of bad reference. It already took
+/// the graceful path (silently dropped, via `TryFrom<RawNodeId> for NodeId<S>` failing)
+/// before the fix above; this pins that down as a passing case rather than one that
+/// happens to avoid the same panic for different reasons.
+#[test]
+fn add_edge_to_unresolvable_node_kind_is_dropped() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let bogus_kind = RawNodeId::new(999, 0);
+    diff.add_edge(alpha_id, bogus_kind, TestEdge::Plain, None);
+
+    let (graph, ids) = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 1);
+    assert_eq!(
+        graph
+            .get_edges_count(
+                RawNodeId::from(&ids[alpha_id]),
+                TestEdge::Plain,
+                Direction::Out
+            )
+            .expect("out edges count"),
+        0
+    );
+}
+
+/// Locks in a documented gotcha from `GraphDiff::apply`'s doc comment: `update_node_property`
+/// never checks whether the node was already deleted by an earlier diff, so applying a
+/// property update against a node tombstoned in a prior `apply` call silently succeeds
+/// rather than erroring.
+#[test]
+fn update_node_property_on_node_deleted_by_earlier_diff_succeeds() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    setup.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::Key, "a.rs".to_string())
+            .unwrap()
+            .build(),
+    );
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    let node = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+
+    let mut remove = GraphDiff::<TestSchema>::default();
+    remove.remove_node(&node);
+    let (graph, _) = remove.apply(graph).expect("apply remove");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+    assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 0);
+
+    let mut update = GraphDiff::<TestSchema>::default();
+    update.update_node_property(
+        &node,
+        TestProperty::Key,
+        QuantifiedProperty::One(PropertyValue::String("still-writable.rs".to_string())),
+    );
+    let (graph, _) = update.apply(graph).expect("apply update on deleted node");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert_eq!(
+        AlphaNode::new(&graph, node.seq()).key().unwrap(),
+        "still-writable.rs"
+    );
+}
+
+/// `update_node_property` targets an `(existing node, property slot)` cell in the
+/// current graph, unlike `remove_node`/`add_edge` which resolve their references
+/// against a shared node-existence notion. A seq that was never created for its kind
+/// is out of range for that cell, so it errors rather than silently no-opping.
+#[test]
+fn update_node_property_on_node_seq_never_created_is_an_error() {
+    let graph = setup_three_file_nodes();
+    let phantom = RawNodeId::new(TestNode::Alpha.index(), 9999);
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.update_node_property(
+        phantom,
+        TestProperty::Key,
+        QuantifiedProperty::One(PropertyValue::String("nowhere.rs".to_string())),
+    );
+    let err = diff.apply(graph).err().expect("expected an error");
+    assert!(matches!(err, Error::NodeOffsetNotFound(_)));
+}
+
+/// Companion to the above: `remove_node` takes the opposite, silently-forgiving path for
+/// the same kind of bad reference. Pinning both down together documents that the two
+/// "existing node" mutations in this API do not treat an out-of-range seq the same way.
+#[test]
+fn remove_node_with_seq_never_created_is_a_silent_no_op() {
+    let graph = setup_three_file_nodes();
+    let phantom = RawNodeId::new(TestNode::Alpha.index(), 9999);
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.remove_node(phantom);
+    let (graph, _) = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert_eq!(graph.node_count_by_kind(TestNode::Alpha), 3);
+}
+
+/// Locks in the other documented gotcha from `GraphDiff::apply`'s doc comment: a stale
+/// `EdgeId` from before an earlier `apply` call's own removal can make `remove_edge`'s
+/// position-based and neighbor-based sides disagree about which edge to remove, leaving
+/// a dangling half-edge that fails `check_integrity` rather than an error at `apply` time.
+#[test]
+fn remove_edge_with_id_captured_before_earlier_removal_corrupts_the_graph() {
+    let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
+    let (beta1, beta2) = (betas[1], betas[2]);
+
+    let mut edges = graph
+        .get_edges(alpha, TestEdge::Plain, Direction::Out)
+        .expect("out edges");
+    edges.sort_by_key(|e| e.seq());
+    // Captured against the pre-removal graph: `stale` names whatever edge is at local
+    // position 1 (beta1) right now. `first` (position 0, beta0) is removed below.
+    let stale = edges.remove(1);
+    let first = edges.remove(0);
+    let stale_local_seq = stale.seq();
+    assert_eq!(stale.dst_node().seq(), beta1.seq());
+
+    let mut remove_first = GraphDiff::<TestSchema>::default();
+    remove_first.remove_edge(first);
+    let (graph, _) = remove_first.apply(graph).expect("apply first removal");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+    // beta2's edge has now shifted down into position 1, the position `stale` points at.
+    let shifted = graph
+        .get_edges(alpha, TestEdge::Plain, Direction::Out)
+        .expect("out edges")
+        .into_iter()
+        .find(|e| e.seq() == stale_local_seq)
+        .expect("an edge now occupies the stale position");
+    assert_eq!(shifted.dst_node().seq(), beta2.seq());
+
+    let mut remove_stale = GraphDiff::<TestSchema>::default();
+    remove_stale.remove_edge(stale);
+    let (graph, _) = remove_stale
+        .apply(graph)
+        .expect("apply diff built with the stale id");
+
+    // Position-based primary side: local position 1 is now beta2's edge, so alpha's Out
+    // list loses it. Neighbor-based secondary side: it re-searches for `stale`'s own
+    // recorded neighbor, beta1, so beta1's In list loses its (still-live) entry instead.
+    // beta2's In entry is left dangling with no matching Out entry on alpha.
+    let dsts = out_edge_dst_seqs(&graph, alpha);
+    assert_eq!(dsts, vec![beta1.seq()]);
+    assert_eq!(
+        graph
+            .get_edges_count(RawNodeId::from(&beta1), TestEdge::Plain, Direction::In)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        graph
+            .get_edges_count(RawNodeId::from(&beta2), TestEdge::Plain, Direction::In)
+            .unwrap(),
+        1
+    );
+    assert!(matches!(
+        graph.check_integrity(),
+        Err(Error::ReverseEdgeNotFound { .. })
+    ));
 }
 
 fn setup_three_file_nodes() -> Graph<TestSchema> {
@@ -1044,6 +1303,65 @@ fn out_edge_dst_seqs(graph: &Graph<TestSchema>, alpha: NodeId<TestSchema>) -> Ve
         .iter()
         .map(|e| e.dst_node().seq())
         .collect()
+}
+
+/// Pins the within-node edge order to `add_edge` call order. `EdgeId::seq()` is the
+/// local position in a node's adjacency run, so any reordering inside the builder
+/// silently renumbers edge ids — nothing else in the suite would catch that.
+#[test]
+fn out_edges_of_one_node_keep_add_edge_order() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_ids: Vec<_> = (0..4)
+        .map(|_| diff.add_node(builders::BetaNodeBuilder::new().build()))
+        .collect();
+    // Deliberately not ascending, so a sort by destination would not reproduce it.
+    for &i in &[2usize, 0, 3, 1] {
+        diff.add_edge(alpha_id, beta_ids[i], TestEdge::Plain, None);
+    }
+    let (graph, ids) = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let alpha = ids[alpha_id];
+    let expected: Vec<usize> = [2usize, 0, 3, 1]
+        .iter()
+        .map(|&i| ids[beta_ids[i]].seq())
+        .collect();
+    assert_eq!(out_edge_dst_seqs(&graph, alpha), expected);
+}
+
+/// Companion to the above: half-edges for different owning nodes interleave in
+/// `add_edge` order, so regrouping them by owner must preserve each owner's own
+/// relative order rather than the global call order.
+#[test]
+fn interleaved_out_edges_keep_per_node_add_edge_order() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha0 = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let alpha1 = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_ids: Vec<_> = (0..2)
+        .map(|_| diff.add_node(builders::BetaNodeBuilder::new().build()))
+        .collect();
+
+    diff.add_edge(alpha0, beta_ids[1], TestEdge::Plain, None);
+    diff.add_edge(alpha1, beta_ids[0], TestEdge::Plain, None);
+    diff.add_edge(alpha0, beta_ids[0], TestEdge::Plain, None);
+    diff.add_edge(alpha1, beta_ids[1], TestEdge::Plain, None);
+
+    let (graph, ids) = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    assert_eq!(
+        out_edge_dst_seqs(&graph, ids[alpha0]),
+        vec![ids[beta_ids[1]].seq(), ids[beta_ids[0]].seq()]
+    );
+    assert_eq!(
+        out_edge_dst_seqs(&graph, ids[alpha1]),
+        vec![ids[beta_ids[0]].seq(), ids[beta_ids[1]].seq()]
+    );
 }
 
 #[test]

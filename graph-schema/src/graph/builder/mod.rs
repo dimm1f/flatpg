@@ -26,7 +26,7 @@ struct NewEdge<S: Schema> {
 
 struct HalfEdge<S: Schema> {
     node: NodeId<S>,
-    neighbor: NodeId<S>,
+    neighbor: RawNodeId,
     direction: Direction,
     edge_kind: EdgeKind<S>,
     property: Option<StoredProperty>,

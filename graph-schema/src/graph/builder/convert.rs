@@ -1,22 +1,4 @@
-use crate::{
-    error::Error,
-    property::{PropertyType, PropertyValue},
-    storage::{StorageArray, StoredProperty},
-    strings_pool::StringsPool,
-};
-
-pub(super) fn stored_property_batch(
-    values: &[PropertyValue],
-    typ: PropertyType,
-    strings: &mut StringsPool,
-) -> Result<StorageArray, Error> {
-    let mut batch = StorageArray::with_capacity(typ, values.len());
-    for prop in values {
-        let prop = to_stored_property(prop, strings);
-        batch.try_push(&prop)?;
-    }
-    Ok(batch)
-}
+use crate::{property::PropertyValue, storage::StoredProperty, strings_pool::StringsPool};
 
 pub(super) fn to_stored_property(
     prop: &PropertyValue,
