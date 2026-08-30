@@ -24,7 +24,7 @@ mod without_registry {
         Base,
     }
 
-    schema!(MacroSchema: MacroNode, MacroEdge, MacroProperty);
+    schema!(MacroSchema: MacroNode, MacroEdge, MacroProperty; version = "1.0.0");
 
     #[test]
     fn schema_macro_defaults_epr_to_no_enum_props() {
@@ -79,7 +79,7 @@ mod with_registry {
         Base,
     }
 
-    schema!(MacroSchema: MacroNode, MacroEdge, MacroProperty, MacroRegistry);
+    schema!(MacroSchema: MacroNode, MacroEdge, MacroProperty, MacroRegistry; version = "1.0.0");
 
     #[test]
     fn schema_macro_accepts_explicit_enum_property_registry() {

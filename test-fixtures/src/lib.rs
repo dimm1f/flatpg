@@ -95,4 +95,6 @@ impl Schema for TestSchema {
     type E = TestEdge;
     type P = TestProperty;
     type EPR = TestPropEnumsRegistry;
+
+    const VERSION: flatpg::schema::Version = flatpg::schema::Version::new(1, 0, 0);
 }

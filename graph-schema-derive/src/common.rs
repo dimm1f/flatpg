@@ -82,8 +82,8 @@ pub(crate) fn typ_last_segment_name(typ: &TypePath) -> Result<String, Error> {
 pub(crate) mod test_support {
     use proc_macro2::TokenStream;
     use syn::{
-        Expr, File, ImplItem, ImplItemFn, Item, ItemEnum, ItemImpl, Signature, Stmt, parse_str,
-        parse2,
+        Expr, File, ImplItem, ImplItemConst, ImplItemFn, Item, ItemEnum, ItemImpl, Signature, Stmt,
+        parse_str, parse2,
     };
 
     pub(crate) fn parse_enum(src: &str) -> ItemEnum {
@@ -124,6 +124,18 @@ pub(crate) mod test_support {
                 return None;
             };
             (method.sig.ident == name).then_some(method)
+        })
+    }
+
+    pub(crate) fn find_const<'a>(
+        impl_block: &'a ItemImpl,
+        name: &str,
+    ) -> Option<&'a ImplItemConst> {
+        impl_block.items.iter().find_map(|item| {
+            let ImplItem::Const(constant) = item else {
+                return None;
+            };
+            (constant.ident == name).then_some(constant)
         })
     }
 

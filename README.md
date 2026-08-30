@@ -142,6 +142,8 @@ impl Schema for SimpleSchema {
     type E = SimpleEdge;
     type P = SimpleProperty;
     type EPR = SimplePropEnumsRegistry;
+
+    const VERSION: Version = Version::new(1, 0, 0);
 }
 ```
 
@@ -152,7 +154,7 @@ impl Schema for SimpleSchema {
 Writing the struct and `impl Schema` by hand is only a few lines, but `schema!` is sugar for exactly that:
 
 ```rust
-schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsRegistry);
+schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsRegistry; version = "1.0.0");
 
 // equivalent to:
 #[derive(Clone, Copy, Default)]
@@ -163,15 +165,19 @@ impl Schema for SimpleSchema {
     type E = SimpleEdge;
     type P = SimpleProperty;
     type EPR = SimplePropEnumsRegistry;
+
+    const VERSION: Version = Version::new(1, 0, 0);
 }
 ```
 
 The last type — the `EPR` — is optional. Leave it out and `schema!` fills in `enum_property::NoEnumProps`, the crate's built-in placeholder registry for schemas with no `Enum<T>`-typed properties at all:
 
 ```rust
-schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty);
+schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty; version = "1.0.0");
 // ... is equivalent to writing `type EPR = flatpg::enum_property::NoEnumProps;` above.
 ```
+
+The trailing `version = "major.minor.patch"` clause is required and fills in `Schema::VERSION`.
 
 ### Building and applying graphs
 
@@ -318,7 +324,7 @@ use flatpg::{
     enum_property::NoEnumProps,
     graph::{Graph, builder::GraphDiff},
     prelude::*,
-    schema::Schema,
+    schema::{Schema, Version},
 };
 
 #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
@@ -361,6 +367,8 @@ impl Schema for SimpleSchema {
     type E = SimpleEdge;
     type P = SimpleProperty;
     type EPR = NoEnumProps;
+
+    const VERSION: Version = Version::new(1, 0, 0);
 }
 
 let mut diff = GraphDiff::<SimpleSchema>::default();

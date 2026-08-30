@@ -58,11 +58,50 @@ pub type EdgeKind<S> = <S as Schema>::E;
 pub type PropKind<S> = <S as Schema>::P;
 pub type EnumPropRegistry<S> = <S as Schema>::EPR;
 
+/// A schema's semantic version, as `(major, minor, patch)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+impl Version {
+    /// Builds a version from its major, minor, and patch components.
+    pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+
+    pub const fn major(&self) -> u32 {
+        self.major
+    }
+
+    pub const fn minor(&self) -> u32 {
+        self.minor
+    }
+
+    pub const fn patch(&self) -> u32 {
+        self.patch
+    }
+}
+
+impl Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major(), self.minor(), self.patch())
+    }
+}
+
 pub trait Schema: Sized + Clone + Copy + Debug {
     type N: NodeItemKind<Self::P>;
     type E: EdgeItemKind;
     type P: PropertyItemKind;
     type EPR: EnumPropertyRegistry;
+
+    const VERSION: Version;
 
     /// Builds a [`RawEdgeId`] from a source node, a destination node, a direction, and an edge handle.
     fn make_edge(
@@ -262,5 +301,23 @@ pub trait Schema: Sized + Clone + Copy + Debug {
     /// Returns all registered enum kinds in the schema.
     fn enum_kinds() -> &'static [Self::EPR] {
         Self::EPR::all()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_ordering_follows_major_then_minor_then_patch_precedence() {
+        assert!(Version::new(1, 0, 0) < Version::new(1, 1, 0));
+        assert!(Version::new(1, 9, 9) < Version::new(2, 0, 0));
+        assert!(Version::new(1, 0, 0) < Version::new(1, 0, 1));
+        assert!(Version::new(1, 2, 3) == Version::new(1, 2, 3));
+    }
+
+    #[test]
+    fn version_display_formats_as_dotted_triple() {
+        assert_eq!(Version::new(1, 2, 3).to_string(), "1.2.3");
     }
 }
