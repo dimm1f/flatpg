@@ -1,51 +1,126 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
     Error, Ident, LitStr, Token, TypePath, Visibility,
     parse::{Parse, ParseStream},
-    punctuated::Punctuated,
 };
+
+const KEYS: &str = "`name`, `node_kind`, `edge_kind`, `prop_kind`, `enum_prop_registry`, \
+                    `version`";
+
+const USAGE: &str = "schema!(name = SimpleSchema, node_kind = SimpleNode, \
+                     edge_kind = SimpleEdge, prop_kind = SimpleProperty, version = \"1.0.0\")";
 
 pub(crate) struct SchemaDef {
     vis: Visibility,
-    ident: Ident,
-    types: Punctuated<TypePath, Token![,]>,
+    name: Ident,
+    node_kind: TypePath,
+    edge_kind: TypePath,
+    prop_kind: TypePath,
+    enum_prop_registry: Option<TypePath>,
     version: LitStr,
 }
 
 impl Parse for SchemaDef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let span = input.span();
         let vis: Visibility = input.parse()?;
-        let ident: Ident = input.parse()?;
-        input.parse::<Token![:]>()?;
-        let types = Punctuated::<TypePath, Token![,]>::parse_separated_nonempty(input)?;
-        input.parse::<Token![;]>()?;
-        let version_kw: Ident = input.parse()?;
-        if version_kw != "version" {
-            return Err(Error::new_spanned(version_kw, "expected `version`"));
+
+        let mut name: Option<Ident> = None;
+        let mut node_kind: Option<TypePath> = None;
+        let mut edge_kind: Option<TypePath> = None;
+        let mut prop_kind: Option<TypePath> = None;
+        let mut enum_prop_registry: Option<TypePath> = None;
+        let mut version: Option<LitStr> = None;
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            match key.to_string().as_str() {
+                "name" => parse_and_set(&mut name, &key, input)?,
+                "node_kind" => parse_and_set(&mut node_kind, &key, input)?,
+                "edge_kind" => parse_and_set(&mut edge_kind, &key, input)?,
+                "prop_kind" => parse_and_set(&mut prop_kind, &key, input)?,
+                "enum_prop_registry" => parse_and_set(&mut enum_prop_registry, &key, input)?,
+                "version" => parse_and_set(&mut version, &key, input)?,
+                _ => return Err(unknown_key_error(&key)),
+            }
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<Token![,]>()?;
         }
-        input.parse::<Token![=]>()?;
-        let version: LitStr = input.parse()?;
-        Ok(Self {
-            vis,
-            ident,
-            types,
-            version,
-        })
+
+        match (name, node_kind, edge_kind, prop_kind, version) {
+            (Some(name), Some(node_kind), Some(edge_kind), Some(prop_kind), Some(version)) => {
+                Ok(Self {
+                    vis,
+                    name,
+                    node_kind,
+                    edge_kind,
+                    prop_kind,
+                    enum_prop_registry,
+                    version,
+                })
+            }
+            (name, node_kind, edge_kind, prop_kind, version) => Err(missing_keys_error(
+                span,
+                &[
+                    ("name", name.is_none()),
+                    ("node_kind", node_kind.is_none()),
+                    ("edge_kind", edge_kind.is_none()),
+                    ("prop_kind", prop_kind.is_none()),
+                    ("version", version.is_none()),
+                ],
+            )),
+        }
     }
 }
 
-fn arity_error(ident: &Ident, count: usize) -> Error {
-    Error::new_spanned(
-        ident,
+fn parse_and_set<T: Parse>(
+    slot: &mut Option<T>,
+    key: &Ident,
+    input: ParseStream,
+) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(duplicate_key_error(key));
+    }
+    *slot = Some(input.parse()?);
+    Ok(())
+}
+
+fn unknown_key_error(key: &Ident) -> Error {
+    Error::new_spanned(key, format!("unknown key `{key}`, expected one of {KEYS}"))
+}
+
+fn duplicate_key_error(key: &Ident) -> Error {
+    Error::new_spanned(key, format!("key `{key}` specified more than once"))
+}
+
+/// Builds the error for a call that omitted required keys, from `(key, is_missing)` pairs.
+fn missing_keys_error(span: Span, keys: &[(&str, bool)]) -> Error {
+    let missing: Vec<&str> = keys
+        .iter()
+        .filter(|&&(_, is_missing)| is_missing)
+        .map(|&(key, _)| key)
+        .collect();
+    let noun = if missing.len() == 1 { "key" } else { "keys" };
+    Error::new(
+        span,
         format!(
-            "schema!({ident}: ...) expects 3 or 4 types — node kind, edge kind, and property \
-             kind enums, plus an optional enum-property registry (found {count}), followed by \
-             `; version = \"major.minor.patch\"`, e.g. \
-             schema!({ident}: SimpleNode, SimpleEdge, SimpleProperty; version = \"1.0.0\") or \
-             schema!({ident}: SimpleNode, SimpleEdge, SimpleProperty, SimpleRegistry; version = \"1.0.0\");"
+            "missing {noun} {} in `schema!`\nhelp: {USAGE}",
+            quoted_list(&missing)
         ),
     )
+}
+
+fn quoted_list(names: &[&str]) -> String {
+    let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 fn parse_version(lit: &LitStr) -> syn::Result<(u32, u32, u32)> {
@@ -54,10 +129,7 @@ fn parse_version(lit: &LitStr) -> syn::Result<(u32, u32, u32)> {
     let [major, minor, patch] = parts.as_slice() else {
         return Err(Error::new_spanned(
             lit,
-            format!(
-                "invalid version \"{value}\": expected exactly 3 dot-separated components, \
-                 e.g. \"1.0.0\""
-            ),
+            format!("invalid version `{value}`, expected `major.minor.patch`"),
         ));
     };
     let parse_component = |s: &str| {
@@ -65,8 +137,8 @@ fn parse_version(lit: &LitStr) -> syn::Result<(u32, u32, u32)> {
             Error::new_spanned(
                 lit,
                 format!(
-                    "invalid version component \"{s}\" in \"{value}\": expected an unsigned \
-                     integer"
+                    "invalid version `{value}`, expected an unsigned integer component, \
+                     found `{s}`"
                 ),
             )
         })
@@ -81,21 +153,17 @@ fn parse_version(lit: &LitStr) -> syn::Result<(u32, u32, u32)> {
 pub(crate) fn expand(def: SchemaDef) -> TokenStream {
     let SchemaDef {
         vis,
-        ident,
-        types,
+        name,
+        node_kind,
+        edge_kind,
+        prop_kind,
+        enum_prop_registry,
         version,
     } = def;
-    let types: Vec<TypePath> = types.into_iter().collect();
 
-    let (node, edge, property, epr) = match types.as_slice() {
-        [node, edge, property] => (
-            node,
-            edge,
-            property,
-            quote!(flatpg::enum_property::NoEnumProps),
-        ),
-        [node, edge, property, epr] => (node, edge, property, quote!(#epr)),
-        other => return arity_error(&ident, other.len()).to_compile_error(),
+    let epr = match enum_prop_registry {
+        Some(registry) => quote!(#registry),
+        None => quote!(flatpg::enum_property::NoEnumProps),
     };
 
     let (major, minor, patch) = match parse_version(&version) {
@@ -103,15 +171,19 @@ pub(crate) fn expand(def: SchemaDef) -> TokenStream {
         Err(err) => return err.to_compile_error(),
     };
 
+    let name_str = name.to_string();
+
     quote! {
         #[derive(Clone, Copy, Default, Debug)]
-        #vis struct #ident;
+        #vis struct #name;
 
-        impl flatpg::schema::Schema for #ident {
-            type N = #node;
-            type E = #edge;
-            type P = #property;
+        impl flatpg::schema::Schema for #name {
+            type N = #node_kind;
+            type E = #edge_kind;
+            type P = #prop_kind;
             type EPR = #epr;
+
+            const NAME: &'static str = #name_str;
 
             const VERSION: flatpg::schema::Version =
                 flatpg::schema::Version::new(#major, #minor, #patch);
@@ -123,7 +195,10 @@ pub(crate) fn expand(def: SchemaDef) -> TokenStream {
 mod tests {
     use super::*;
     use crate::common::test_support::{find_const, find_impl, has_compile_error, parse_output};
-    use syn::{Expr, ExprLit, ImplItem, Item, ItemStruct, Lit};
+    use syn::{Expr, ExprLit, ImplItem, Item, ItemStruct, Lit, punctuated::Punctuated};
+
+    const MINIMAL: &str = "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, \
+                           version = \"1.0.0\"";
 
     fn parse_schema_def(src: &str) -> SchemaDef {
         syn::parse_str(src).expect("failed to parse schema def")
@@ -180,6 +255,18 @@ mod tests {
             .to_string()
     }
 
+    fn name_const_value(impl_block: &syn::ItemImpl) -> String {
+        let constant = find_const(impl_block, "NAME").expect("expected a NAME const");
+        let Expr::Lit(ExprLit {
+            lit: Lit::Str(lit_str),
+            ..
+        }) = &constant.expr
+        else {
+            panic!("expected NAME to be initialized with a string literal");
+        };
+        lit_str.value()
+    }
+
     fn version_const_value(impl_block: &syn::ItemImpl) -> (u32, u32, u32) {
         let constant = find_const(impl_block, "VERSION").expect("expected a VERSION const");
         let Expr::Call(call) = &constant.expr else {
@@ -208,98 +295,180 @@ mod tests {
     }
 
     #[test]
-    fn parses_three_types_without_registry() {
+    fn parses_required_keys_without_registry() {
         let def = parse_schema_def(
-            "SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty; version = \"1.0.0\"",
+            "name = SimpleSchema, node_kind = SimpleNode, edge_kind = SimpleEdge, \
+             prop_kind = SimpleProperty, version = \"1.0.0\"",
         );
-        assert_eq!(def.types.len(), 3);
+        assert_eq!(def.name, "SimpleSchema");
+        assert!(def.enum_prop_registry.is_none());
     }
 
     #[test]
-    fn parses_four_types_with_registry() {
+    fn parses_optional_enum_prop_registry() {
         let def = parse_schema_def(
-            "SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsRegistry; \
+            "name = SimpleSchema, node_kind = SimpleNode, edge_kind = SimpleEdge, \
+             prop_kind = SimpleProperty, enum_prop_registry = SimpleRegistry, \
              version = \"1.0.0\"",
         );
-        assert_eq!(def.types.len(), 4);
+        let registry = def.enum_prop_registry.expect("expected a registry");
+        assert_eq!(type_name(&syn::Type::Path(registry)), "SimpleRegistry");
+    }
+
+    #[test]
+    fn parses_keys_in_any_order() {
+        let def = parse_schema_def(
+            "version = \"1.2.3\", prop_kind = C, name = SimpleSchema, edge_kind = B, \
+             node_kind = A",
+        );
+        assert_eq!(def.name, "SimpleSchema");
+        assert_eq!(def.version.value(), "1.2.3");
+    }
+
+    #[test]
+    fn parses_trailing_comma() {
+        let def = parse_schema_def(&format!("{MINIMAL},"));
+        assert_eq!(def.name, "SimpleSchema");
+    }
+
+    #[test]
+    fn parses_path_qualified_kind_types() {
+        let def = parse_schema_def(
+            "name = SimpleSchema, node_kind = kinds::SimpleNode, edge_kind = kinds::SimpleEdge, \
+             prop_kind = kinds::SimpleProperty, version = \"1.0.0\"",
+        );
+        assert_eq!(type_name(&syn::Type::Path(def.node_kind)), "SimpleNode");
     }
 
     #[test]
     fn parses_optional_pub_visibility() {
-        let public = parse_schema_def("pub SimpleSchema: A, B, C; version = \"1.0.0\"");
-        let inherited = parse_schema_def("SimpleSchema: A, B, C; version = \"1.0.0\"");
+        let public = parse_schema_def(&format!("pub {MINIMAL}"));
+        let inherited = parse_schema_def(MINIMAL);
         assert!(matches!(public.vis, Visibility::Public(_)));
         assert!(matches!(inherited.vis, Visibility::Inherited));
     }
 
     #[test]
     fn parses_restricted_pub_crate_visibility() {
-        let def = parse_schema_def("pub(crate) SimpleSchema: A, B, C; version = \"1.0.0\"");
+        let def = parse_schema_def(&format!("pub(crate) {MINIMAL}"));
         assert!(matches!(def.vis, Visibility::Restricted(_)));
     }
 
     #[test]
-    fn parses_version_clause() {
-        let def = parse_schema_def("SimpleSchema: A, B, C; version = \"1.2.3\"");
+    fn parses_version_value() {
+        let def = parse_schema_def(
+            "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, \
+             version = \"1.2.3\"",
+        );
         assert_eq!(def.version.value(), "1.2.3");
     }
 
     #[test]
-    fn expand_preserves_restricted_visibility_on_struct() {
-        let def = parse_schema_def("pub(crate) SimpleSchema: A, B, C; version = \"1.0.0\"");
-        let file = parse_output(expand(def));
-        let item = find_struct(&file, "SimpleSchema");
-        assert!(matches!(item.vis, Visibility::Restricted(_)));
+    fn missing_equals_sign_is_a_parse_error() {
+        assert!(
+            syn::parse_str::<SchemaDef>(
+                "name SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, \
+                 version = \"1.0.0\""
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn missing_colon_is_a_parse_error() {
-        assert!(syn::parse_str::<SchemaDef>("SimpleSchema A, B, C").is_err());
+    fn missing_comma_between_keys_is_a_parse_error() {
+        assert!(
+            syn::parse_str::<SchemaDef>(
+                "name = SimpleSchema node_kind = A, edge_kind = B, prop_kind = C, \
+                 version = \"1.0.0\""
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn missing_version_clause_is_a_parse_error() {
-        assert!(syn::parse_str::<SchemaDef>("SimpleSchema: A, B, C").is_err());
+    fn unknown_key_is_a_parse_error() {
+        assert!(syn::parse_str::<SchemaDef>(&format!("{MINIMAL}, registry = R")).is_err());
     }
 
     #[test]
-    fn wrong_version_keyword_is_a_parse_error() {
-        assert!(syn::parse_str::<SchemaDef>("SimpleSchema: A, B, C; ver = \"1.0.0\"").is_err());
+    fn duplicate_key_is_a_parse_error() {
+        assert!(syn::parse_str::<SchemaDef>(&format!("{MINIMAL}, node_kind = D")).is_err());
     }
 
     #[test]
-    fn too_few_types_emits_compile_error() {
-        let def = parse_schema_def("SimpleSchema: A, B; version = \"1.0.0\"");
-        assert!(has_compile_error(expand(def)));
+    fn duplicate_key_wins_over_an_unparsable_value() {
+        let Err(err) = syn::parse_str::<SchemaDef>(&format!("{MINIMAL}, node_kind = ,")) else {
+            panic!("expected a parse error");
+        };
+        assert!(
+            err.to_string()
+                .contains("`node_kind` specified more than once"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn too_many_types_emits_compile_error() {
-        let def = parse_schema_def("SimpleSchema: A, B, C, D, E; version = \"1.0.0\"");
-        assert!(has_compile_error(expand(def)));
+    fn missing_name_is_a_parse_error() {
+        assert!(
+            syn::parse_str::<SchemaDef>(
+                "node_kind = A, edge_kind = B, prop_kind = C, version = \"1.0.0\""
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_kind_key_is_a_parse_error() {
+        assert!(
+            syn::parse_str::<SchemaDef>(
+                "name = SimpleSchema, node_kind = A, prop_kind = C, version = \"1.0.0\""
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_version_is_a_parse_error() {
+        assert!(
+            syn::parse_str::<SchemaDef>(
+                "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn empty_input_is_a_parse_error() {
+        assert!(syn::parse_str::<SchemaDef>("").is_err());
     }
 
     #[test]
     fn too_few_version_components_emits_compile_error() {
-        let def = parse_schema_def("SimpleSchema: A, B, C; version = \"1.0\"");
+        let def = parse_schema_def(
+            "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, version = \"1.0\"",
+        );
         assert!(has_compile_error(expand(def)));
     }
 
     #[test]
     fn empty_version_string_emits_compile_error() {
-        let def = parse_schema_def("SimpleSchema: A, B, C; version = \"\"");
+        let def = parse_schema_def(
+            "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, version = \"\"",
+        );
         assert!(has_compile_error(expand(def)));
     }
 
     #[test]
     fn non_numeric_version_component_emits_compile_error() {
-        let def = parse_schema_def("SimpleSchema: A, B, C; version = \"1.x.0\"");
+        let def = parse_schema_def(
+            "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, version = \"1.x.0\"",
+        );
         assert!(has_compile_error(expand(def)));
     }
 
     #[test]
     fn expand_generates_unit_struct_with_clone_copy_default() {
-        let def = parse_schema_def("SimpleSchema: A, B, C; version = \"1.0.0\"");
+        let def = parse_schema_def(MINIMAL);
         let file = parse_output(expand(def));
         let item = find_struct(&file, "SimpleSchema");
 
@@ -313,16 +482,25 @@ mod tests {
 
     #[test]
     fn expand_preserves_visibility_on_struct() {
-        let def = parse_schema_def("pub SimpleSchema: A, B, C; version = \"1.0.0\"");
+        let def = parse_schema_def(&format!("pub {MINIMAL}"));
         let file = parse_output(expand(def));
         let item = find_struct(&file, "SimpleSchema");
         assert!(matches!(item.vis, Visibility::Public(_)));
     }
 
     #[test]
+    fn expand_preserves_restricted_visibility_on_struct() {
+        let def = parse_schema_def(&format!("pub(crate) {MINIMAL}"));
+        let file = parse_output(expand(def));
+        let item = find_struct(&file, "SimpleSchema");
+        assert!(matches!(item.vis, Visibility::Restricted(_)));
+    }
+
+    #[test]
     fn expand_assigns_associated_types() {
         let def = parse_schema_def(
-            "SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty; version = \"1.0.0\"",
+            "name = SimpleSchema, node_kind = SimpleNode, edge_kind = SimpleEdge, \
+             prop_kind = SimpleProperty, version = \"1.0.0\"",
         );
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
@@ -337,9 +515,7 @@ mod tests {
 
     #[test]
     fn expand_defaults_epr_to_no_enum_props_when_omitted() {
-        let def = parse_schema_def(
-            "SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty; version = \"1.0.0\"",
-        );
+        let def = parse_schema_def(MINIMAL);
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
 
@@ -348,10 +524,7 @@ mod tests {
 
     #[test]
     fn expand_uses_provided_epr_when_given() {
-        let def = parse_schema_def(
-            "SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimpleRegistry; \
-             version = \"1.0.0\"",
-        );
+        let def = parse_schema_def(&format!("{MINIMAL}, enum_prop_registry = SimpleRegistry"));
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
 
@@ -362,8 +535,20 @@ mod tests {
     }
 
     #[test]
+    fn expand_assigns_name_const_from_the_name_key() {
+        let def = parse_schema_def(MINIMAL);
+        let file = parse_output(expand(def));
+        let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
+
+        assert_eq!(name_const_value(impl_block), "SimpleSchema");
+    }
+
+    #[test]
     fn expand_assigns_version_const() {
-        let def = parse_schema_def("SimpleSchema: A, B, C; version = \"2.5.13\"");
+        let def = parse_schema_def(
+            "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, \
+             version = \"2.5.13\"",
+        );
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
 
@@ -372,7 +557,10 @@ mod tests {
 
     #[test]
     fn expand_accepts_version_with_leading_zeros() {
-        let def = parse_schema_def("SimpleSchema: A, B, C; version = \"01.0.0\"");
+        let def = parse_schema_def(
+            "name = SimpleSchema, node_kind = A, edge_kind = B, prop_kind = C, \
+             version = \"01.0.0\"",
+        );
         let file = parse_output(expand(def));
         let impl_block = find_impl(&file, "Schema", "SimpleSchema").expect("expected Schema impl");
 

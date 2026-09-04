@@ -2,6 +2,7 @@ mod without_registry {
     use flatpg::{
         graph::{Graph, builder::GraphDiff},
         prelude::*,
+        schema::{Schema, Version},
     };
 
     #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]
@@ -24,7 +25,13 @@ mod without_registry {
         Base,
     }
 
-    schema!(MacroSchema: MacroNode, MacroEdge, MacroProperty; version = "1.0.0");
+    schema!(
+        name = MacroSchema,
+        node_kind = MacroNode,
+        edge_kind = MacroEdge,
+        prop_kind = MacroProperty,
+        version = "1.0.0"
+    );
 
     #[test]
     fn schema_macro_defaults_epr_to_no_enum_props() {
@@ -42,6 +49,18 @@ mod without_registry {
             panic!("expected Node::A");
         };
         assert_eq!(a.key().unwrap(), "hello");
+    }
+
+    #[test]
+    fn schema_macro_sets_name_and_version_consts() {
+        assert_eq!(MacroSchema::NAME, "MacroSchema");
+        assert_eq!(MacroSchema::VERSION, Version::new(1, 0, 0));
+    }
+
+    #[test]
+    fn schema_accessors_return_the_consts() {
+        assert_eq!(MacroSchema::name(), MacroSchema::NAME);
+        assert_eq!(MacroSchema::version(), MacroSchema::VERSION);
     }
 }
 
@@ -79,7 +98,14 @@ mod with_registry {
         Base,
     }
 
-    schema!(MacroSchema: MacroNode, MacroEdge, MacroProperty, MacroRegistry; version = "1.0.0");
+    schema!(
+        name = MacroSchema,
+        node_kind = MacroNode,
+        edge_kind = MacroEdge,
+        prop_kind = MacroProperty,
+        enum_prop_registry = MacroRegistry,
+        version = "1.0.0"
+    );
 
     #[test]
     fn schema_macro_accepts_explicit_enum_property_registry() {

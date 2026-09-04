@@ -143,18 +143,28 @@ impl Schema for SimpleSchema {
     type P = SimpleProperty;
     type EPR = SimplePropEnumsRegistry;
 
+    const NAME: &'static str = "SimpleSchema";
     const VERSION: Version = Version::new(1, 0, 0);
 }
 ```
 
 `N`, `E`, `P`, and `EPR` are read at compile time to size and lay out the flat storage arrays that `Graph<S>` and `GraphDiff<S>` use internally: the number of kinds each associated type declares fixes the number of storage slots, so the layout is derived from the schema rather than being pointer-based.
 
+`NAME` and `VERSION` identify the schema itself. Neither affects the storage layout; they are metadata for reporting and for comparing one schema against another.
+
 #### `schema!`
 
 Writing the struct and `impl Schema` by hand is only a few lines, but `schema!` is sugar for exactly that:
 
 ```rust
-schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsRegistry; version = "1.0.0");
+schema!(
+    name = SimpleSchema,
+    node_kind = SimpleNode,
+    edge_kind = SimpleEdge,
+    prop_kind = SimpleProperty,
+    enum_prop_registry = SimplePropEnumsRegistry,
+    version = "1.0.0"
+);
 
 // equivalent to:
 #[derive(Clone, Copy, Default)]
@@ -166,18 +176,31 @@ impl Schema for SimpleSchema {
     type P = SimpleProperty;
     type EPR = SimplePropEnumsRegistry;
 
+    const NAME: &'static str = "SimpleSchema";
     const VERSION: Version = Version::new(1, 0, 0);
 }
 ```
 
-The last type — the `EPR` — is optional. Leave it out and `schema!` fills in `enum_property::NoEnumProps`, the crate's built-in placeholder registry for schemas with no `Enum<T>`-typed properties at all:
+Keys may appear in any order. All of them are required except `enum_prop_registry`, which defaults to `enum_property::NoEnumProps` the crate's built-in placeholder registry for schemas that declare no `Enum<T>`-typed properties:
 
 ```rust
-schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty; version = "1.0.0");
+schema!(
+    name = SimpleSchema,
+    node_kind = SimpleNode,
+    edge_kind = SimpleEdge,
+    prop_kind = SimpleProperty,
+    version = "1.0.0"
+);
 // ... is equivalent to writing `type EPR = flatpg::enum_property::NoEnumProps;` above.
 ```
 
-The trailing `version = "major.minor.patch"` clause is required and fills in `Schema::VERSION`.
+`name` names the generated struct and, as a string literal, fills in `Schema::NAME`. `version = "major.minor.patch"` is required and fills in `Schema::VERSION`.
+
+The generated struct is private unless you prefix the argument list with a visibility, which is passed through to it:
+
+```rust
+schema!(pub name = SimpleSchema, node_kind = SimpleNode, edge_kind = SimpleEdge, prop_kind = SimpleProperty, version = "1.0.0");
+```
 
 ### Building and applying graphs
 
@@ -368,6 +391,7 @@ impl Schema for SimpleSchema {
     type P = SimpleProperty;
     type EPR = NoEnumProps;
 
+    const NAME: &'static str = "SimpleSchema";
     const VERSION: Version = Version::new(1, 0, 0);
 }
 

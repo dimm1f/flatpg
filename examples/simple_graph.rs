@@ -50,7 +50,14 @@ enum SimpleEdge {
     Extended,
 }
 
-schema!(SimpleSchema: SimpleNode, SimpleEdge, SimpleProperty, SimplePropEnumsRegistry; version = "1.0.0");
+schema!(
+    name = SimpleSchema,
+    node_kind = SimpleNode,
+    edge_kind = SimpleEdge,
+    prop_kind = SimpleProperty,
+    enum_prop_registry = SimplePropEnumsRegistry,
+    version = "1.0.0"
+);
 
 #[allow(deprecated)]
 fn main() {

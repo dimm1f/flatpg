@@ -101,7 +101,19 @@ pub trait Schema: Sized + Clone + Copy + Debug {
     type P: PropertyItemKind;
     type EPR: EnumPropertyRegistry;
 
+    const NAME: &'static str;
+
     const VERSION: Version;
+
+    /// Returns the schema's name.
+    fn name() -> &'static str {
+        Self::NAME
+    }
+
+    /// Returns the schema's version.
+    fn version() -> Version {
+        Self::VERSION
+    }
 
     /// Builds a [`RawEdgeId`] from a source node, a destination node, a direction, and an edge handle.
     fn make_edge(
