@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "check_integrity"
 harness = false
+
+[[bench]]
+name = "strings_pool"
+harness = false

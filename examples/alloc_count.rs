@@ -75,6 +75,94 @@ fn bulk(n: usize, edges_per_node: usize) -> GraphDiff<TestSchema> {
     diff
 }
 
+/// Builds `n` nodes and `edges_per_node` edges each, with `edge_property` deciding what the
+/// edges carry: a unique string, one shared string, or nothing at all.
+fn bulk_with(
+    n: usize,
+    edges_per_node: usize,
+    edge_property: EdgeProperty,
+) -> GraphDiff<TestSchema> {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let ids: Vec<usize> = (0..n).map(|i| diff.add_node(node_for(i))).collect();
+    let stride = (n / (edges_per_node + 1)).max(1);
+    for (i, &src) in ids.iter().enumerate() {
+        for k in 1..=edges_per_node {
+            let dst = ids[(i + k * stride) % n];
+            match edge_property {
+                EdgeProperty::UniqueString => diff.add_edge(
+                    src,
+                    dst,
+                    TestEdge::Labeled,
+                    Some(PropertyValue::String(format!("edge-{i}-{k}"))),
+                ),
+                EdgeProperty::SharedString => diff.add_edge(
+                    src,
+                    dst,
+                    TestEdge::Labeled,
+                    Some(PropertyValue::String("shared".to_string())),
+                ),
+                EdgeProperty::None => diff.add_edge(src, dst, TestEdge::Plain, None),
+            };
+        }
+    }
+    diff
+}
+
+#[derive(Clone, Copy)]
+enum EdgeProperty {
+    UniqueString,
+    SharedString,
+    None,
+}
+
+/// Builds `n` nodes carrying no string-typed properties at all (Beta and Gamma only).
+fn bulk_stringless_nodes(n: usize) -> GraphDiff<TestSchema> {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    for i in 0..n {
+        diff.add_node(if i % 2 == 0 {
+            builders::BetaNodeBuilder::new()
+                .add_property(TestProperty::Count, i as i32)
+                .unwrap()
+                .build()
+        } else {
+            builders::GammaNodeBuilder::new()
+                .add_property(TestProperty::Score, i as f64)
+                .unwrap()
+                .build()
+        });
+    }
+    diff
+}
+
+/// Reports `prepare` and `commit` separately, to split staging from writing.
+fn measure_phases(label: &str, diff: &GraphDiff<TestSchema>) {
+    let mut graph = Graph::<TestSchema>::new();
+
+    ALLOCS.store(0, Ordering::Relaxed);
+    BYTES.store(0, Ordering::Relaxed);
+    ON.store(1, Ordering::Relaxed);
+    let staged = diff.prepare(&mut graph).expect("prepare");
+    ON.store(0, Ordering::Relaxed);
+    let prepare_allocs = ALLOCS.load(Ordering::Relaxed);
+    let prepare_bytes = BYTES.load(Ordering::Relaxed);
+
+    ALLOCS.store(0, Ordering::Relaxed);
+    BYTES.store(0, Ordering::Relaxed);
+    ON.store(1, Ordering::Relaxed);
+    let out = staged.commit();
+    ON.store(0, Ordering::Relaxed);
+    let commit_allocs = ALLOCS.load(Ordering::Relaxed);
+    let commit_bytes = BYTES.load(Ordering::Relaxed);
+
+    println!(
+        "{label:<34} {prepare_allocs:>9} + {commit_allocs:>6} allocs   {:>6} + {:>6} KB",
+        prepare_bytes / 1024,
+        commit_bytes / 1024,
+    );
+    drop(out);
+    drop(graph);
+}
+
 fn measure<T>(label: &str, unit: usize, f: impl FnOnce() -> T) {
     ALLOCS.store(0, Ordering::Relaxed);
     BYTES.store(0, Ordering::Relaxed);
@@ -179,6 +267,56 @@ fn main() {
         rm.apply(g4).expect("apply")
     });
 
+    println!("\n--- where the allocations come from (20k nodes, 2 edges/node) ---");
+
+    let nodes_count2 = 20_000;
+    let diff = bulk_with(nodes_count2, 2, EdgeProperty::UniqueString);
+    measure("edges: unique string each", nodes_count2, || {
+        diff.apply(Graph::new()).expect("apply")
+    });
+    let diff = bulk_with(nodes_count2, 2, EdgeProperty::SharedString);
+    measure("edges: one shared string", nodes_count2, || {
+        diff.apply(Graph::new()).expect("apply")
+    });
+    let diff = bulk_with(nodes_count2, 2, EdgeProperty::None);
+    measure("edges: no property", nodes_count2, || {
+        diff.apply(Graph::new()).expect("apply")
+    });
+    let diff = bulk_stringless_nodes(nodes_count2);
+    measure("nodes only, no string props", nodes_count2, || {
+        diff.apply(Graph::new()).expect("apply")
+    });
+
+    println!("\n--- wall time, best of 5 ---");
+    for (label, prop) in [
+        ("edges: unique string each", EdgeProperty::UniqueString),
+        ("edges: one shared string", EdgeProperty::SharedString),
+        ("edges: no property", EdgeProperty::None),
+    ] {
+        let best = (0..5)
+            .map(|_| {
+                let diff = bulk_with(nodes_count2, 2, prop);
+                let graph = Graph::new();
+                let start = std::time::Instant::now();
+                let out = diff.apply(graph).expect("apply");
+                let elapsed = start.elapsed();
+                drop(out);
+                elapsed
+            })
+            .min()
+            .expect("five runs");
+        println!("{label:<34} {:>9.2} ms", best.as_secs_f64() * 1000.0);
+    }
+
+    println!("\n--- prepare vs commit (allocs, KB) ---");
+    measure_phases("bulk_insert_empty (20k, 2 e/n)", &bulk(nodes_count2, 2));
+    measure_phases(
+        "edges: no property",
+        &bulk_with(nodes_count2, 2, EdgeProperty::None),
+    );
+    measure_phases("add_node (20k nodes, 0 edges)", &bulk(nodes_count2, 0));
+
+    println!();
     let n2 = 100_000;
     let (g, _) = footprint("graph footprint (100k nodes, 100k edges)", n2, || {
         bulk(n2, 1).apply(Graph::new()).expect("apply")
