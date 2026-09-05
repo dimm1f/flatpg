@@ -56,6 +56,25 @@ impl StringsPool {
     pub fn get_arc(&self, string_id: RawStringId) -> Option<Arc<str>> {
         self.entries.get(string_id.0 as usize).cloned()
     }
+
+    /// Returns how many strings are interned.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns `true` when nothing is interned yet.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        if len >= self.entries.len() {
+            return;
+        }
+        for entry in self.entries.drain(len..) {
+            self.lookup.remove(&entry);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +106,34 @@ mod tests {
 
         let other_pool = StringsPool::new();
         assert_eq!(other_pool.get(id), None);
+    }
+
+    /// Locks the rollback `GraphDiff::prepare` and `StagedDiff`'s `Drop` rely on: a truncated
+    /// string must leave the dedup cache too, or re-interning it would hand back a handle that
+    /// no longer resolves.
+    #[test]
+    fn truncate_removes_entries_along_with_their_dedup_cache_slots() {
+        let mut pool = StringsPool::new();
+        pool.intern("kept");
+        let dropped = pool.intern("dropped");
+
+        pool.truncate(1);
+        let reinterned = pool.intern("dropped");
+
+        assert_eq!(pool.len(), 2);
+        assert_eq!(reinterned, dropped);
+        assert_eq!(pool.get(reinterned), Some("dropped"));
+    }
+
+    #[test]
+    fn truncate_past_the_last_entry_keeps_the_pool_as_it_is() {
+        let mut pool = StringsPool::new();
+        let id = pool.intern("hello");
+
+        pool.truncate(5);
+
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool.get(id), Some("hello"));
     }
 
     #[test]

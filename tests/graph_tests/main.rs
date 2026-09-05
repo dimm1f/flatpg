@@ -10,3 +10,4 @@ mod node_remove;
 mod node_update;
 mod property_types;
 mod raw_graph;
+mod staged_diff;

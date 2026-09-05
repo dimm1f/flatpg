@@ -252,6 +252,16 @@ impl<S: Schema> GraphView<S> for Graph<S> {
     }
 }
 
+pub trait GraphViewMut<S: Schema>: GraphView<S> {
+    fn graph_mut(&mut self) -> &mut Graph<S>;
+}
+
+impl<S: Schema> GraphViewMut<S> for Graph<S> {
+    fn graph_mut(&mut self) -> &mut Graph<S> {
+        self
+    }
+}
+
 fn node_is_deleted<S: Schema>(nodes: &NodeMetaStorage<S>, node_ref: NodeId<S>) -> bool {
     nodes[node_ref.kind().index()]
         .get(node_ref.seq())

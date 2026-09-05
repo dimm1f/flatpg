@@ -44,7 +44,22 @@ pub(super) struct EdgeSlotInsert {
     pub(super) offsets: Vec<Offset>,
 }
 
-pub struct StagedDiff<S: Schema> {
+/// A validated set of changes, bound to the graph it was prepared against.
+///
+/// [`GraphDiff::prepare`](super::GraphDiff::prepare) resolves every change into the exact
+/// writes it implies and hands them over in this form, holding the graph exclusively until
+/// [`commit`](StagedDiff::commit) performs them. Dropping one instead leaves the graph as it
+/// was.
+#[must_use = "a staged diff leaves the graph unchanged until `commit` is called"]
+pub struct StagedDiff<'g, S: Schema> {
+    pub(super) graph: &'g mut Graph<S>,
+    /// The string pool's length before staging, while the strings staging interned still have
+    /// to be rolled back; `None` once [`StagedDiff::commit`] has taken them over.
+    pub(super) strings_baseline: Option<usize>,
+    pub(super) parts: StagedParts<S>,
+}
+
+pub(super) struct StagedParts<S: Schema> {
     pub(super) new_node_meta: NodeMetaStorage<S>,
     pub(super) node_remapper: Vec<NodeId<S>>,
     pub(super) node_tombstones: Vec<RawNodeId>,
@@ -54,14 +69,42 @@ pub struct StagedDiff<S: Schema> {
     pub(super) edge_inserts: Vec<EdgeSlotInsert>,
 }
 
-impl<S: Schema> StagedDiff<S> {
-    // Writes every already-validated piece of `self` into `graph`. Every check that
-    // could have failed was already performed by `prepare` — see the `Result` note on
-    // the type doc above. `graph` must be the same graph, in the same state, that
-    // `prepare` built `self` from — see the `StagedDiff` type doc for what breaks if
-    // it isn't.
-    pub fn commit(self, graph: &mut Graph<S>) -> Result<Vec<NodeId<S>>, Error> {
-        let StagedDiff {
+impl<S: Schema> Default for StagedParts<S> {
+    fn default() -> Self {
+        Self {
+            new_node_meta: NodeMetaStorage::new(),
+            node_remapper: Vec::new(),
+            node_tombstones: Vec::new(),
+            property_replacements: Vec::new(),
+            edge_replacements: Vec::new(),
+            property_appends: Vec::new(),
+            edge_inserts: Vec::new(),
+        }
+    }
+}
+
+impl<S: Schema> Drop for StagedDiff<'_, S> {
+    fn drop(&mut self) {
+        if let Some(baseline) = self.strings_baseline {
+            self.graph.strings.truncate(baseline);
+        }
+    }
+}
+
+impl<S: Schema> StagedDiff<'_, S> {
+    /// Writes every staged change into the graph, returning the ids of the diff's new nodes.
+    ///
+    /// The ids come back in the order the nodes were added to the
+    /// [`GraphDiff`](super::GraphDiff).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the graph's flat storage does not hold the invariants
+    /// [`CheckIntegrity::check_integrity`](crate::graph::integrity::CheckIntegrity::check_integrity)
+    /// verifies, which every way of building a [`Graph<S>`] establishes.
+    pub fn commit(mut self) -> Vec<NodeId<S>> {
+        self.strings_baseline = None;
+        let StagedParts {
             mut new_node_meta,
             node_remapper,
             node_tombstones,
@@ -69,7 +112,8 @@ impl<S: Schema> StagedDiff<S> {
             edge_replacements,
             property_appends,
             edge_inserts,
-        } = self;
+        } = std::mem::take(&mut self.parts);
+        let graph = &mut *self.graph;
 
         for node_ref in &node_tombstones {
             if let Some(meta) = graph.node_meta_storage[node_ref.kind()].get_mut(node_ref.seq()) {
@@ -101,19 +145,31 @@ impl<S: Schema> StagedDiff<S> {
         for append in property_appends {
             let slot = &mut graph.property_storage[append.slot_index];
             let mut values_batch = append.values_batch;
-            slot.values_mut().try_append(&mut values_batch)?;
+            // Panic: `try_append` only rejects a batch whose type differs from the slot's, and
+            // `prepare` built this batch from this very slot's `typ()`; the slot cannot have
+            // been retyped since, because this staged diff has held the graph exclusively.
+            slot.values_mut()
+                .try_append(&mut values_batch)
+                .expect("staged property batch carries its slot's type");
             slot.offsets_mut().extend(append.offsets_tail);
         }
 
         for insert in edge_inserts {
             let slot = &mut graph.edge_storage[insert.slot_index];
             if !insert.batches.is_empty() {
-                merge_edge_batches(slot, &insert.batches, insert.neighbors, insert.values)?;
+                // Panic: the merge only fails on a batch position behind the neighbors already
+                // copied or past the end of the slot's arrays, which takes offsets that are not
+                // monotonic or overrun their arrays. Every `Graph<S>` rules that out —
+                // `Graph::new` starts empty, `TryFrom<RawGraph<S>>` runs `check_integrity`, and
+                // this method is the only other writer — and `prepare` derived these positions
+                // from the offsets left by the edge replacements applied above.
+                merge_edge_batches(slot, &insert.batches, insert.neighbors, insert.values)
+                    .expect("staged edge batches fit the slot they were measured against");
             }
             *slot.offsets_mut() = insert.offsets;
         }
 
-        Ok(node_remapper)
+        node_remapper
     }
 }
 

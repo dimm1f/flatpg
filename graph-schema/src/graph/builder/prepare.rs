@@ -2,7 +2,7 @@ use crate::{
     EdgeDirectionKind, ItemAsStr, ItemIndex,
     edge::Direction,
     error::Error,
-    graph::{Graph, node_is_deleted},
+    graph::{Graph, GraphViewMut, node_is_deleted},
     node::{NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, Schema},
@@ -14,11 +14,37 @@ use super::slots::{
     EdgeHalfBuckets, SlotBuckets, SlotHalfEdge, prepare_edge_removals, prepare_new_edges,
     prepare_new_node_properties, prepare_property_updates,
 };
-use super::staged::StagedDiff;
+use super::staged::{StagedDiff, StagedParts};
 use super::{Change, GraphDiff, HalfEdge, NewEdge, NewOrExistingNode, QuantifiedProperty};
 
 impl<S: Schema> GraphDiff<S> {
-    pub fn prepare(&self, graph: &mut Graph<S>) -> Result<StagedDiff<S>, Error> {
+    /// Validates this diff against `view`'s graph and stages every write it implies.
+    ///
+    /// The graph is left as it was unless [`StagedDiff::commit`] is called on the result: a
+    /// failing check reports an [`Error`], and dropping the [`StagedDiff`] discards the staged
+    /// changes. The exclusive borrow taken here is held until the commit, so the graph the
+    /// staged offsets were measured against cannot move underneath them.
+    pub fn prepare<'g, G: GraphViewMut<S>>(
+        &self,
+        view: &'g mut G,
+    ) -> Result<StagedDiff<'g, S>, Error> {
+        let graph = view.graph_mut();
+        let strings_baseline = graph.strings.len();
+
+        match self.stage(graph) {
+            Ok(parts) => Ok(StagedDiff {
+                graph,
+                strings_baseline: Some(strings_baseline),
+                parts,
+            }),
+            Err(err) => {
+                graph.strings.truncate(strings_baseline);
+                Err(err)
+            }
+        }
+    }
+
+    fn stage(&self, graph: &mut Graph<S>) -> Result<StagedParts<S>, Error> {
         let (mut node_tombstones, slot_property_updates, slot_edge_removals) =
             classify_changes(&self.changes, graph)?;
 
@@ -175,7 +201,7 @@ impl<S: Schema> GraphDiff<S> {
             &edge_offsets_baseline,
         )?;
 
-        Ok(StagedDiff {
+        Ok(StagedParts {
             new_node_meta: new_nodes,
             node_remapper,
             node_tombstones,

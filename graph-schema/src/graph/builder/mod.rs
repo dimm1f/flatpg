@@ -172,8 +172,8 @@ impl<S: Schema> GraphDiff<S> {
     }
 
     // NOTE: Be careful when you apply several diffs that were built from the same graph, one
-    // after another. Ids from an earlier diff can become wrong once an earlier `apply` call
-    // changes the graph, and this does not always cause an error:
+    // after another. Ids from an earlier diff can become wrong once an earlier `apply` or
+    // `StagedDiff::commit` call changes the graph, and this does not always cause an error:
     // - `remove_edge` finds a half-edge by its position in the node's own edge list. When one
     //   diff removes an edge, every later edge on that node moves one position down. If another
     //   diff still holds an edge id from before that removal, it may now point to a different
@@ -181,12 +181,16 @@ impl<S: Schema> GraphDiff<S> {
     // - `remove_node` only marks a node as deleted, so node ids stay valid across diffs. But
     //   `update_node_property` does not check whether the node was already deleted by an
     //   earlier diff, so a later diff can still write a property onto a deleted node.
-    // To stay safe, apply one diff, then build the next diff from the graph `apply` just
-    // returned, instead of reusing ids from before that call.
+    // To stay safe, apply one diff, then build the next diff from the graph left by that call,
+    // instead of reusing ids from before it.
+    // Planned: graph versioning removes this hazard. A `Graph` will carry a version, a
+    // `GraphDiff` will be derived from a graph and pinned to the version it saw when it was
+    // created, and `prepare` will reject a diff whose pinned version no longer matches the
+    // graph instead of silently resolving stale ids against it. A `GraphDiff` created without
+    // a graph to derive from will then only be applicable to an empty graph.
     pub fn apply(self, graph: impl GraphView<S>) -> Result<(Graph<S>, Vec<NodeId<S>>), Error> {
         let mut graph = graph.into_graph();
-        let staged = self.prepare(&mut graph)?;
-        let node_remapper = staged.commit(&mut graph)?;
+        let node_remapper = self.prepare(&mut graph)?.commit();
         Ok((graph, node_remapper))
     }
 }

@@ -19,8 +19,8 @@ pub mod prelude {
         ItemKindPropertyType, NodeItemKind, PropertyItemKind,
     };
 
-    pub use graph_schema::graph::GraphView;
     pub use graph_schema::graph::integrity::CheckIntegrity;
+    pub use graph_schema::graph::{GraphView, GraphViewMut};
 }
 
 pub use graph_schema::{
