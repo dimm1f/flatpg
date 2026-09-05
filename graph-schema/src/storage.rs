@@ -634,7 +634,7 @@ impl Iterator for StorageArrayIter<'_> {
 
 pub struct NodeMetaStorage<S> {
     storage: Vec<Vec<NodeMeta>>,
-    _phantom: PhantomData<S>,
+    _phantom: PhantomData<fn() -> S>,
 }
 
 impl<S: Schema> NodeMetaStorage<S> {
@@ -729,7 +729,7 @@ impl OffsetStorage for EdgeStorageSlot {
 }
 pub struct EdgeStorage<S> {
     storage: Vec<EdgeStorageSlot>,
-    _phantom: PhantomData<S>,
+    _phantom: PhantomData<fn() -> S>,
 }
 
 impl<S: Schema> EdgeStorage<S> {
@@ -811,7 +811,7 @@ impl OffsetStorage for PropertyStorageSlot {
 
 pub struct PropertyStorage<S> {
     storage: Vec<PropertyStorageSlot>,
-    _phantom: PhantomData<S>,
+    _phantom: PhantomData<fn() -> S>,
 }
 
 impl<S: Schema> PropertyStorage<S> {

@@ -70,6 +70,8 @@ pub trait NodeItemKind<P: PropertyItemKind>:
     + Hash
     + Ord
     + Debug
+    + Send
+    + Sync
     + 'static
 {
 }
@@ -87,6 +89,8 @@ pub trait EdgeItemKind:
     + Hash
     + Ord
     + Debug
+    + Send
+    + Sync
     + 'static
 {
 }
@@ -104,6 +108,8 @@ pub trait PropertyItemKind:
     + Hash
     + Ord
     + Debug
+    + Send
+    + Sync
     + 'static
 {
 }
@@ -115,7 +121,17 @@ pub trait EnumPropertyIndex:
 }
 
 pub trait EnumPropertyRegistry:
-    ItemAsStr + ItemFromStr + ItemIndex + ItemFromIndex + ItemAll + Copy + Clone + Debug + 'static
+    ItemAsStr
+    + ItemFromStr
+    + ItemIndex
+    + ItemFromIndex
+    + ItemAll
+    + Copy
+    + Clone
+    + Debug
+    + Send
+    + Sync
+    + 'static
 {
     fn variant_count(&self) -> usize;
 }

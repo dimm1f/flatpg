@@ -11,4 +11,8 @@ categories.workspace = true
 description = "Core schema traits and compact flat storage underlying flatpg's memory-efficient labeled property graphs"
 
 [dependencies]
+rayon = { version = "1", optional = true }
 thiserror = "2"
+
+[features]
+parallel = ["dep:rayon"]

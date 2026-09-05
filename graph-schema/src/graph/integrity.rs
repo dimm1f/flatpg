@@ -70,8 +70,18 @@ pub(crate) fn check_integrity<S: Schema>(
         strings,
     };
 
+    #[cfg(feature = "parallel")]
+    if parallel::is_worthwhile(&storages) {
+        return parallel::check_slots(&storages);
+    }
+
+    check_slots(&storages)
+}
+
+/// Checks every storage slot on one thread, then pairs up each edge kind's half-edges.
+fn check_slots<S: Schema>(storages: &Storages<'_, S>) -> Result<(), Error> {
     for (node_kind, property_kind) in S::property_storage_slots_iter() {
-        check_property_slot(&storages, node_kind, property_kind)?;
+        check_property_slot(storages, node_kind, property_kind)?;
     }
 
     let mut out_halves = vec![Vec::new(); S::number_of_edge_kinds()];
@@ -82,7 +92,7 @@ pub(crate) fn check_integrity<S: Schema>(
             Direction::Out => &mut out_halves[edge_kind.index()],
             Direction::In => &mut in_halves[edge_kind.index()],
         };
-        check_edge_slot(&storages, node_kind, direction, edge_kind, halves)?;
+        check_edge_slot(storages, node_kind, direction, edge_kind, halves)?;
     }
 
     for &edge_kind in S::edge_kinds() {
@@ -339,7 +349,18 @@ fn check_half_edge_pairing<E: ItemAsStr>(
 ) -> Result<(), Error> {
     out_halves.sort_unstable();
     in_halves.sort_unstable();
+    report_pairing_mismatch(edge_kind, out_halves, in_halves)
+}
 
+/// Reports the lowest-ordered half-edge that has no reverse, given both sides already sorted.
+///
+/// Split out from [`check_half_edge_pairing`] so the sequential and `parallel` paths differ
+/// only in how they sort.
+fn report_pairing_mismatch<E: ItemAsStr>(
+    edge_kind: E,
+    out_halves: &[HalfEdge],
+    in_halves: &[HalfEdge],
+) -> Result<(), Error> {
     let mismatch = out_halves
         .iter()
         .zip(in_halves.iter())
@@ -365,6 +386,92 @@ fn check_half_edge_pairing<E: ItemAsStr>(
         direction.as_str(),
         edge_kind.as_str(),
     ))
+}
+
+/// The `parallel` feature's rayon-backed driver, checking storage slots concurrently.
+///
+/// Every check is a pure read of a distinct slot, so the work parallelizes without
+/// synchronization; only the half-edge sort and comparison need a slot's full output.
+/// Per-unit results are reduced in order with `Result::and` rather than short-circuited, so a
+/// corrupt graph reports the same error the sequential driver does.
+#[cfg(feature = "parallel")]
+mod parallel {
+    use rayon::prelude::*;
+
+    use crate::EdgeDirectionKind;
+
+    use super::{
+        Direction, Error, HalfEdge, ItemIndex, Schema, Storages, check_edge_slot,
+        check_property_slot, report_pairing_mismatch,
+    };
+
+    /// Node-plus-half-edge count below which the sequential driver wins.
+    ///
+    /// Rayon's per-`join` cost dominates on small graphs, and `check_integrity` runs on graphs
+    /// of a handful of nodes throughout the test suite. Measured with a single edge kind — the
+    /// worst case, since more kinds split the half-edge work into more buckets and break even
+    /// sooner.
+    const PARALLEL_THRESHOLD: usize = 10_000;
+
+    /// Returns whether the graph is large enough for the parallel driver to pay for itself.
+    pub(super) fn is_worthwhile<S: Schema>(storages: &Storages<'_, S>) -> bool {
+        let nodes: usize = storages.node_meta.iter().map(Vec::len).sum();
+        let edges: usize = storages
+            .edges
+            .iter()
+            .map(|slot| slot.neighbors().len())
+            .sum();
+        nodes + edges >= PARALLEL_THRESHOLD
+    }
+
+    pub(super) fn check_slots<S: Schema>(storages: &Storages<'_, S>) -> Result<(), Error> {
+        let property_slots: Vec<_> = S::property_storage_slots_iter().collect();
+        property_slots
+            .par_iter()
+            .map(|&(node_kind, property_kind)| {
+                check_property_slot(storages, node_kind, property_kind)
+            })
+            .reduce(|| Ok(()), |a, b| a.and(b))?;
+
+        let buckets: Vec<_> = S::edge_kinds()
+            .iter()
+            .flat_map(|&edge_kind| {
+                Direction::values()
+                    .iter()
+                    .map(move |&direction| (edge_kind, direction))
+            })
+            .collect();
+
+        let collected: Vec<Result<Vec<HalfEdge>, Error>> = buckets
+            .par_iter()
+            .map(|&(edge_kind, direction)| {
+                let mut halves = Vec::new();
+                for &node_kind in S::node_kinds() {
+                    check_edge_slot(storages, node_kind, direction, edge_kind, &mut halves)?;
+                }
+                Ok(halves)
+            })
+            .collect();
+
+        let mut out_halves: Vec<Vec<HalfEdge>> = vec![Vec::new(); S::number_of_edge_kinds()];
+        let mut in_halves: Vec<Vec<HalfEdge>> = vec![Vec::new(); S::number_of_edge_kinds()];
+        for (&(edge_kind, direction), halves) in buckets.iter().zip(collected) {
+            match direction {
+                Direction::Out => out_halves[edge_kind.index()] = halves?,
+                Direction::In => in_halves[edge_kind.index()] = halves?,
+            }
+        }
+
+        out_halves
+            .par_iter_mut()
+            .zip(in_halves.par_iter_mut())
+            .zip(S::edge_kinds().par_iter())
+            .map(|((out, incoming), &edge_kind)| {
+                rayon::join(|| out.par_sort_unstable(), || incoming.par_sort_unstable());
+                report_pairing_mismatch(edge_kind, out, incoming)
+            })
+            .reduce(|| Ok(()), |a, b| a.and(b))
+    }
 }
 
 #[cfg(test)]

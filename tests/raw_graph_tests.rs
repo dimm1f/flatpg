@@ -404,3 +404,77 @@ fn parallel_edge_degree_mismatch_is_rejected() {
         .expect("expected an error");
     assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
 }
+
+// `check_integrity` only takes the rayon-backed path above its size threshold, so every other
+// test in this file exercises the sequential driver regardless of whether the feature is on.
+// These build a graph big enough to cross that threshold.
+
+/// Number of nodes needed to put a graph past the parallel driver's size threshold, given
+/// `EDGES_PER_NODE` half-edges on each side of every node.
+#[cfg(feature = "parallel")]
+const ABOVE_THRESHOLD_NODES: usize = 3_000;
+#[cfg(feature = "parallel")]
+const BELOW_THRESHOLD_NODES: usize = 9;
+#[cfg(feature = "parallel")]
+const EDGES_PER_NODE: usize = 2;
+
+/// Repoints one `In` half-edge at a different, still-existing node.
+///
+/// Leaves every offsets array and values array untouched, so the graph stays structurally
+/// well-formed and the only broken invariant is half-edge pairing.
+#[cfg(feature = "parallel")]
+fn repoint_one_in_half_edge(raw: &mut RawGraph<TestSchema>) {
+    for &node_kind in TestSchema::node_kinds() {
+        let slot_index =
+            TestSchema::edge_storage_slot(node_kind, Direction::In, TestEdge::Labeled).index();
+        if raw.edge_storage[slot_index].neighbors().is_empty() {
+            continue;
+        }
+        let old = raw.edge_storage[slot_index].neighbors()[0];
+        let count = raw.node_meta_storage[old.kind()].len();
+        assert!(count > 1, "need a second node of the kind to repoint onto");
+        raw.edge_storage[slot_index].neighbors_mut()[0] =
+            RawNodeId::new(old.kind(), (old.seq() + 1) % count);
+        return;
+    }
+    panic!("no populated In/Labeled slot to corrupt");
+}
+
+#[cfg(feature = "parallel")]
+fn build_graph(node_count: usize) -> Graph<TestSchema> {
+    let (graph, _) = test_fixtures::graphs::build_bulk_diff(node_count, EDGES_PER_NODE)
+        .apply(Graph::new())
+        .expect("apply setup");
+    graph
+}
+
+#[test]
+#[cfg(feature = "parallel")]
+fn graph_above_the_parallel_threshold_passes_check_integrity() {
+    build_graph(ABOVE_THRESHOLD_NODES)
+        .check_integrity()
+        .expect("graph passes integrity check");
+}
+
+/// Locks in that a pairing defect is caught on either side of the size threshold, so the
+/// parallel driver's bucketed half-edge collection stays equivalent to the sequential one.
+///
+/// The two graphs hold different nodes, so only the error variant is comparable, not its
+/// text. Running one graph through both drivers would need a way to pick the driver, which
+/// is deliberately not part of the public API.
+#[test]
+#[cfg(feature = "parallel")]
+fn pairing_defect_is_rejected_on_both_sides_of_the_parallel_threshold() {
+    for node_count in [BELOW_THRESHOLD_NODES, ABOVE_THRESHOLD_NODES] {
+        let mut raw: RawGraph<TestSchema> = build_graph(node_count).into();
+        repoint_one_in_half_edge(&mut raw);
+
+        let err = Graph::<TestSchema>::try_from(raw)
+            .err()
+            .expect("expected an error");
+        assert!(
+            matches!(err, Error::ReverseEdgeNotFound { .. }),
+            "expected a pairing error for {node_count} nodes, got {err:?}"
+        );
+    }
+}

@@ -28,6 +28,9 @@ readme = "README.md"
 graph-schema = { path = "graph-schema", version = "0.1.0" }
 graph-schema-derive = { path = "graph-schema-derive", version = "0.1.0" }
 
+[features]
+parallel = ["graph-schema/parallel"]
+
 [dev-dependencies]
 criterion = "0.5"
 test-fixtures = { path = "test-fixtures" }
