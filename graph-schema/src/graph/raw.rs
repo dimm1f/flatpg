@@ -1,8 +1,8 @@
 //! Raw, unchecked access to a graph's flat CSR storage, for bulk loading, deserialization,
 //! or other lower-level construction that doesn't go through [`crate::graph::builder::GraphDiff`].
 //!
-//! Converting a [`RawGraph<S>`] back into a [`Graph<S>`] runs
-//! [`crate::graph::integrity::check_integrity`] before handing back a checked graph — see
+//! Converting a [`RawGraph<S>`] back into a [`Graph<S>`] runs the same checks as
+//! [`CheckIntegrity::check_integrity`] before handing back a checked graph — see
 //! [`crate::graph::integrity`] for what it verifies and its known limitations.
 
 use crate::{

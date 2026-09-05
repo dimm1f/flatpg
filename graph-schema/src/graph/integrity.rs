@@ -5,7 +5,7 @@
 //! graph. This check verifies the same rules directly on the final data: offset arrays are
 //! well-formed, storage slot types match the schema, node/string/enum references point to real
 //! data, and every edge has a matching reverse edge. `TryFrom<RawGraph<S>> for Graph<S>` runs
-//! this check before returning a valid [`Graph<S>`].
+//! this check before returning a valid [`Graph<S>`](crate::graph::Graph).
 //!
 //! Known limitations:
 //! - Enum id checks only confirm that a [`RawEnumId`] points to *some* registered enum
@@ -33,7 +33,8 @@ use crate::{
 /// Verifies a graph's flat storage is well-formed. See the module docs for known limitations.
 ///
 /// Implemented for both `Graph<S>` (in `graph/mod.rs`) and `RawGraph<S>` (in `graph/raw.rs`),
-/// next to each type's own definition; both delegate to [`check_integrity`] here.
+/// next to each type's own definition; both delegate to the private `check_integrity` free
+/// function in this module.
 pub trait CheckIntegrity<S: Schema> {
     fn check_integrity(&self) -> Result<(), Error>;
 }
