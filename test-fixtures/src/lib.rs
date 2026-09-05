@@ -6,6 +6,8 @@
 
 use flatpg::{prelude::*, schema::Schema};
 
+pub mod graphs;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumProperty)]
 pub enum Status {
     Active,

@@ -16,7 +16,7 @@
 //!   (degree symmetry). They do not check that the edges' property values match, since
 //!   `StoredProperty` does not implement `PartialEq`/`Eq`.
 
-use std::collections::HashMap;
+use std::{cmp::Ordering, fmt::Display};
 
 use crate::{
     EnumPropertyRegistry, ItemAsStr, ItemIndex,
@@ -29,6 +29,22 @@ use crate::{
     storage::{EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, PropertyStorage, StorageArray},
     strings_pool::{RawStringId, StringsPool},
 };
+
+/// A half-edge canonicalized as a `(source, destination)` pair, so that the two halves of
+/// one edge produce the same value whichever endpoint they are stored on.
+///
+/// The edge kind is not part of the value: halves are bucketed by `edge_kind.index()` and
+/// compared only within one bucket, so edges of different kinds between the same pair of nodes
+/// never pair up with each other. Node kind needs no bucketing, since [`RawNodeId`] already
+/// carries it alongside the sequence number.
+type HalfEdge = (RawNodeId, RawNodeId);
+
+struct Storages<'a, S: Schema> {
+    node_meta: &'a NodeMetaStorage<S>,
+    edges: &'a EdgeStorage<S>,
+    properties: &'a PropertyStorage<S>,
+    strings: &'a StringsPool,
+}
 
 /// Verifies a graph's flat storage is well-formed. See the module docs for known limitations.
 ///
@@ -47,59 +63,96 @@ pub(crate) fn check_integrity<S: Schema>(
 ) -> Result<(), Error> {
     check_storage_sizes::<S>(node_meta_storage, edge_storage, property_storage)?;
 
+    let storages = Storages {
+        node_meta: node_meta_storage,
+        edges: edge_storage,
+        properties: property_storage,
+        strings,
+    };
+
     for (node_kind, property_kind) in S::property_storage_slots_iter() {
-        let slot_index = S::property_storage_slot(node_kind, property_kind);
-        let slot_name = slot_index.to_string();
-        let expected_count = node_meta_storage[node_kind.index()].len();
-        let expected_type = S::node_property_type(property_kind);
-
-        let slot = &property_storage[slot_index.index()];
-        check_offsets_shape(&slot_name, slot.offsets(), expected_count)?;
-        check_storage_type(slot.values(), expected_type)?;
-        if expected_type != PropertyType::None {
-            check_offsets_bounds(&slot_name, slot.offsets(), slot.values().len())?;
-        }
-
-        check_values_content::<S>(slot.values(), node_meta_storage, strings)?;
+        check_property_slot(&storages, node_kind, property_kind)?;
     }
 
-    let mut half_edge_counts: HashMap<(RawNodeId, Direction, usize, RawNodeId), usize> =
-        HashMap::new();
+    let mut out_halves = vec![Vec::new(); S::number_of_edge_kinds()];
+    let mut in_halves = vec![Vec::new(); S::number_of_edge_kinds()];
 
     for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
-        let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind);
-        let slot_name = slot_index.to_string();
-        let expected_count = node_meta_storage[node_kind.index()].len();
-
-        let slot = &edge_storage[slot_index.index()];
-        check_offsets_shape(&slot_name, slot.offsets(), expected_count)?;
-
-        check_offsets_bounds(&slot_name, slot.offsets(), slot.neighbors().len())?;
-        for node_id in slot.neighbors() {
-            check_node_id::<S>(*node_id, node_meta_storage)?;
-        }
-
-        let expected_prop_type = S::edge_property_type(edge_kind);
-        check_storage_type(slot.values(), expected_prop_type)?;
-        if expected_prop_type != PropertyType::None {
-            check_offsets_bounds(&slot_name, slot.offsets(), slot.values().len())?;
-        }
-        check_values_content::<S>(slot.values(), node_meta_storage, strings)?;
-
-        for seq in 0..expected_count {
-            let (start, end) = slot
-                .get_offset(seq)
-                .unwrap_or((Offset::zero(), Offset::zero()));
-            let node = RawNodeId::new(node_kind.index(), seq);
-            for neighbor in slot.get_neighbors(start, end) {
-                *half_edge_counts
-                    .entry((node, direction, edge_kind.index(), neighbor))
-                    .or_insert(0) += 1;
-            }
-        }
+        let halves = match direction {
+            Direction::Out => &mut out_halves[edge_kind.index()],
+            Direction::In => &mut in_halves[edge_kind.index()],
+        };
+        check_edge_slot(&storages, node_kind, direction, edge_kind, halves)?;
     }
 
-    check_half_edge_pairing::<S>(&half_edge_counts)?;
+    for &edge_kind in S::edge_kinds() {
+        check_half_edge_pairing(
+            edge_kind,
+            &mut out_halves[edge_kind.index()],
+            &mut in_halves[edge_kind.index()],
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Checks one node property storage slot, and the node/string/enum ids its values embed.
+fn check_property_slot<S: Schema>(
+    storages: &Storages<'_, S>,
+    node_kind: S::N,
+    property_kind: S::P,
+) -> Result<(), Error> {
+    let slot_index = S::property_storage_slot(node_kind, property_kind);
+    let expected_count = storages.node_meta[node_kind.index()].len();
+    let expected_type = S::node_property_type(property_kind);
+
+    let slot = &storages.properties[slot_index.index()];
+    check_offsets_shape(slot_index, slot.offsets(), expected_count)?;
+    check_storage_type(slot.values(), expected_type)?;
+    if expected_type != PropertyType::None {
+        check_offsets_bounds(slot_index, slot.offsets(), slot.values().len())?;
+    }
+
+    check_values_content::<S>(slot.values(), storages.node_meta, storages.strings)
+}
+
+/// Checks one edge storage slot, appending its half-edges to `halves` in canonical
+/// `(source, destination)` form for [`check_half_edge_pairing`].
+fn check_edge_slot<S: Schema>(
+    storages: &Storages<'_, S>,
+    node_kind: S::N,
+    direction: Direction,
+    edge_kind: S::E,
+    halves: &mut Vec<HalfEdge>,
+) -> Result<(), Error> {
+    let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind);
+    let expected_count = storages.node_meta[node_kind.index()].len();
+
+    let slot = &storages.edges[slot_index.index()];
+    check_offsets_shape(slot_index, slot.offsets(), expected_count)?;
+
+    check_offsets_bounds(slot_index, slot.offsets(), slot.neighbors().len())?;
+    for node_id in slot.neighbors() {
+        check_node_id::<S>(*node_id, storages.node_meta)?;
+    }
+
+    let expected_prop_type = S::edge_property_type(edge_kind);
+    check_storage_type(slot.values(), expected_prop_type)?;
+    if expected_prop_type != PropertyType::None {
+        check_offsets_bounds(slot_index, slot.offsets(), slot.values().len())?;
+    }
+    check_values_content::<S>(slot.values(), storages.node_meta, storages.strings)?;
+
+    halves.reserve(slot.neighbors().len());
+    for (seq, window) in slot.offsets().windows(2).enumerate() {
+        let node = RawNodeId::new(node_kind.index(), seq);
+        for neighbor in slot.get_neighbors(window[0], window[1]) {
+            halves.push(match direction {
+                Direction::Out => (node, neighbor),
+                Direction::In => (neighbor, node),
+            });
+        }
+    }
 
     Ok(())
 }
@@ -136,13 +189,17 @@ fn check_storage_sizes<S: Schema>(
 /// Checks an offsets array: its length must be `node_count + 1`, it must start at zero, and
 /// each value must be greater than or equal to the one before it. The non-decreasing check
 /// uses [`Offset::checked_sub`], since `Offset` guarantees it can never go negative.
-fn check_offsets_shape(slot: &str, offsets: &[Offset], expected_count: usize) -> Result<(), Error> {
+fn check_offsets_shape(
+    slot: impl Display,
+    offsets: &[Offset],
+    expected_count: usize,
+) -> Result<(), Error> {
     if offsets.is_empty() {
         return Ok(());
     }
     if offsets.len() != expected_count + 1 {
         return Err(Error::offsets_length_mismatch(
-            slot,
+            slot.to_string(),
             expected_count + 1,
             offsets.len(),
         ));
@@ -150,7 +207,11 @@ fn check_offsets_shape(slot: &str, offsets: &[Offset], expected_count: usize) ->
 
     let first = offsets.first().copied().unwrap_or_else(Offset::zero);
     if first.value() != 0 {
-        return Err(Error::offsets_bounds_mismatch(slot, 0, first.value()));
+        return Err(Error::offsets_bounds_mismatch(
+            slot.to_string(),
+            0,
+            first.value(),
+        ));
     }
 
     for window in offsets.windows(2) {
@@ -164,11 +225,15 @@ fn check_offsets_shape(slot: &str, offsets: &[Offset], expected_count: usize) ->
 /// values/neighbors array. The caller skips this check for edge `properties` slots typed
 /// [`PropertyType::None`], because those slots are not resized together with `neighbors`
 /// (see module docs).
-fn check_offsets_bounds(slot: &str, offsets: &[Offset], array_len: usize) -> Result<(), Error> {
+fn check_offsets_bounds(
+    slot: impl Display,
+    offsets: &[Offset],
+    array_len: usize,
+) -> Result<(), Error> {
     let last = offsets.last().copied().unwrap_or_else(Offset::zero);
     if last.value() != array_len {
         return Err(Error::offsets_bounds_mismatch(
-            slot,
+            slot.to_string(),
             array_len,
             last.value(),
         ));
@@ -256,39 +321,50 @@ fn check_enum_id<EPR: EnumPropertyRegistry>(enum_id: RawEnumId) -> Result<(), Er
     Ok(())
 }
 
-/// Confirms every half-edge has a matching reverse half, with the same count.
+/// Confirms every half-edge of one edge kind has a matching reverse half, with the same count.
 ///
-/// This counts how many times each half-edge appears, instead of just checking that a
-/// reverse half-edge exists. That way it can catch a mismatched count of parallel edges.
-/// Example: two `Out` edges from A to B, but only one `In` edge back from B to A. A simple
-/// existence check would miss this, since a matching reverse edge does exist — just not
-/// enough of them.
-fn check_half_edge_pairing<S: Schema>(
-    half_edge_counts: &HashMap<(RawNodeId, Direction, usize, RawNodeId), usize>,
+/// Both halves of an edge canonicalize to the same `(source, destination)` pair, so the two
+/// sides pair up exactly when `out_halves` and `in_halves` hold equal multisets. Sorting
+/// makes that comparison a linear scan and pins the reported error to the lowest-ordered
+/// unpaired half. Both slices are left sorted.
+///
+/// Comparing multisets rather than testing each half for the mere existence of a reverse
+/// catches a mismatched count of parallel edges: two `Out` edges from A to B against a
+/// single `In` edge back from B to A does have a matching reverse edge — just not enough
+/// of them.
+fn check_half_edge_pairing<E: ItemAsStr>(
+    edge_kind: E,
+    out_halves: &mut [HalfEdge],
+    in_halves: &mut [HalfEdge],
 ) -> Result<(), Error> {
-    for (&(node, direction, edge_kind_index, neighbor), &count) in half_edge_counts {
-        let opposite = match direction {
-            Direction::In => Direction::Out,
-            Direction::Out => Direction::In,
-        };
-        let mirror_count = half_edge_counts
-            .get(&(neighbor, opposite, edge_kind_index, node))
-            .copied()
-            .unwrap_or(0);
+    out_halves.sort_unstable();
+    in_halves.sort_unstable();
 
-        if mirror_count != count {
-            let edge_kind_name = S::edge_kind_by_index(edge_kind_index)
-                .map(|k| k.as_str().to_string())
-                .unwrap_or_default();
-            return Err(Error::reverse_edge_not_found(
-                neighbor.to_string(),
-                node.to_string(),
-                direction.as_str().to_string(),
-                edge_kind_name,
-            ));
-        }
-    }
-    Ok(())
+    let mismatch = out_halves
+        .iter()
+        .zip(in_halves.iter())
+        .position(|(out_half, in_half)| out_half != in_half);
+
+    let ((src, dst), direction) = match mismatch {
+        Some(i) if out_halves[i] < in_halves[i] => (out_halves[i], Direction::Out),
+        Some(i) => (in_halves[i], Direction::In),
+        None => match out_halves.len().cmp(&in_halves.len()) {
+            Ordering::Greater => (out_halves[in_halves.len()], Direction::Out),
+            Ordering::Less => (in_halves[out_halves.len()], Direction::In),
+            Ordering::Equal => return Ok(()),
+        },
+    };
+
+    let (node, target) = match direction {
+        Direction::Out => (src, dst),
+        Direction::In => (dst, src),
+    };
+    Err(Error::reverse_edge_not_found(
+        target.to_string(),
+        node.to_string(),
+        direction.as_str(),
+        edge_kind.as_str(),
+    ))
 }
 
 #[cfg(test)]
@@ -439,5 +515,73 @@ mod tests {
         let unregistered = RawEnumId::new(1, 0);
         let err = check_enum_id::<TestRegistry>(unregistered).unwrap_err();
         assert!(matches!(err, Error::UnresolvedEnumKind(_)));
+    }
+
+    fn node(seq: usize) -> RawNodeId {
+        RawNodeId::new(0, seq)
+    }
+
+    /// Locks in that pairing compares multisets, not slice order: the two sides are built by
+    /// walking different storage slots and only agree once sorted.
+    #[test]
+    fn half_edge_pairing_accepts_reordered_matching_halves() {
+        let mut out_halves = [(node(0), node(1)), (node(2), node(3))];
+        let mut in_halves = [(node(2), node(3)), (node(0), node(1))];
+        assert!(
+            check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves).is_ok()
+        );
+    }
+
+    #[test]
+    fn half_edge_pairing_rejects_out_half_without_reverse() {
+        let mut out_halves = [(node(0), node(1)), (node(0), node(2))];
+        let mut in_halves = [(node(0), node(1))];
+        let err = check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves)
+            .expect_err("expected an error");
+
+        let Error::ReverseEdgeNotFound {
+            target,
+            node: owner,
+            direction,
+            ..
+        } = err
+        else {
+            panic!("expected ReverseEdgeNotFound, got {err:?}");
+        };
+        assert_eq!(target, node(2).to_string());
+        assert_eq!(owner, node(0).to_string());
+        assert_eq!(direction, "Out");
+    }
+
+    #[test]
+    fn half_edge_pairing_rejects_in_half_without_reverse() {
+        let mut out_halves = [(node(0), node(1))];
+        let mut in_halves = [(node(0), node(1)), (node(0), node(2))];
+        let err = check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves)
+            .expect_err("expected an error");
+
+        let Error::ReverseEdgeNotFound {
+            target,
+            node: owner,
+            direction,
+            ..
+        } = err
+        else {
+            panic!("expected ReverseEdgeNotFound, got {err:?}");
+        };
+        assert_eq!(target, node(0).to_string());
+        assert_eq!(owner, node(2).to_string());
+        assert_eq!(direction, "In");
+    }
+
+    /// A plain existence check would accept this: the reverse edge does exist, there is just
+    /// one of it against two forward halves.
+    #[test]
+    fn half_edge_pairing_rejects_parallel_edge_count_mismatch() {
+        let mut out_halves = [(node(0), node(1)), (node(0), node(1))];
+        let mut in_halves = [(node(0), node(1))];
+        let err = check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves)
+            .expect_err("expected an error");
+        assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
     }
 }

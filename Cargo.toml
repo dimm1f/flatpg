@@ -35,3 +35,7 @@ test-fixtures = { path = "test-fixtures" }
 [[bench]]
 name = "graph_diff_apply"
 harness = false
+
+[[bench]]
+name = "check_integrity"
+harness = false
