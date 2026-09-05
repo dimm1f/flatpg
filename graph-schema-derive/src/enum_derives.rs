@@ -75,7 +75,7 @@ pub fn enum_item_all_derive(input: &ItemEnum) -> TokenStream {
     quote! {
         const #items_array_name: [#ident; #variants_count] = [#(#variants,)*];
         #[automatically_derived]
-        impl #impl_generics ItemAll for #ident #ty_generics #where_clause {
+        impl #impl_generics ::flatpg::prelude::ItemAll for #ident #ty_generics #where_clause {
             fn all() -> &'static [#ident] {
                 &#items_array_name
             }
@@ -91,18 +91,18 @@ pub fn enum_item_from_index_derive(input: &ItemEnum) -> TokenStream {
         .iter()
         .enumerate()
         .map(|(i, Variant { ident: variant, .. })| {
-            quote! {#i => Some(#ident::#variant)}
+            quote! {#i => ::core::option::Option::Some(#ident::#variant)}
         });
 
     quote! {
         #[automatically_derived]
-        impl #impl_generics ItemFromIndex for #ident #ty_generics #where_clause {
-            fn from_index(index: usize) -> Option<Self> {
+        impl #impl_generics ::flatpg::prelude::ItemFromIndex for #ident #ty_generics #where_clause {
+            fn from_index(index: usize) -> ::core::option::Option<Self> {
                 match index {
                     #(
                         #variants,
                     )*
-                    _ => None,
+                    _ => ::core::option::Option::None,
                 }
             }
         }
@@ -122,7 +122,7 @@ pub fn enum_item_index_derive(input: &ItemEnum) -> TokenStream {
 
     quote! {
         #[automatically_derived]
-        impl #impl_generics ItemIndex for #ident #ty_generics #where_clause {
+        impl #impl_generics ::flatpg::prelude::ItemIndex for #ident #ty_generics #where_clause {
             fn index(&self) -> usize {
                 match self {
                     #(#variants,)*
@@ -159,7 +159,7 @@ pub fn enum_item_as_str_derive(input: &ItemEnum) -> TokenStream {
 
     quote! {
         #[automatically_derived]
-        impl #impl_generics ItemAsStr for #ident #ty_generics #where_clause {
+        impl #impl_generics ::flatpg::prelude::ItemAsStr for #ident #ty_generics #where_clause {
             fn as_str(&self) -> &'static str {
                 match self {
                     #(
@@ -194,22 +194,24 @@ pub fn enum_item_from_str_derive(input: &ItemEnum) -> TokenStream {
 
     let orig_variants = labeled_variants
         .iter()
-        .map(|(variant, label)| quote! {#label => Ok(#ident::#variant)});
+        .map(|(variant, label)| quote! {#label => ::core::result::Result::Ok(#ident::#variant)});
 
     quote! {
         #[automatically_derived]
-        impl #impl_generics std::str::FromStr for #ident #ty_generics #where_clause {
-            type Err = flatpg::error::Error;
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
+        impl #impl_generics ::core::str::FromStr for #ident #ty_generics #where_clause {
+            type Err = ::flatpg::error::Error;
+            fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {
                 match s {
                     #(
                         #orig_variants,
                     )*
-                    _ => Err(Self::Err::unknown_label(stringify!(#ident), s)),
+                    _ => ::core::result::Result::Err(
+                        Self::Err::unknown_label(stringify!(#ident), s),
+                    ),
                 }
             }
         }
-        impl #impl_generics ItemFromStr for #ident #ty_generics #where_clause {}
+        impl #impl_generics ::flatpg::prelude::ItemFromStr for #ident #ty_generics #where_clause {}
     }
 }
 
@@ -329,16 +331,16 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
             // must be dropped here (it's unpacked separately by `property_binding`'s `Enum` arm).
             let typ_name = typ_last_segment_name(typ)?;
             let typ_ident = format_ident!("{}", typ_name);
-            let typ = quote! {#ident::#variant => flatpg::property::PropertyType::#typ_ident};
+            let typ = quote! {#ident::#variant => ::flatpg::property::PropertyType::#typ_ident};
 
             let qty = if has_qty {
                 let prop_qty = attr
                     .prop_qty
                     .as_ref()
                     .ok_or_else(|| absent_attribute_error(variant, has_qty))?;
-                quote! {#ident::#variant => flatpg::property::QuantityType::#prop_qty}
+                quote! {#ident::#variant => ::flatpg::property::QuantityType::#prop_qty}
             } else {
-                quote! {#ident::#variant => flatpg::property::QuantityType::One}
+                quote! {#ident::#variant => ::flatpg::property::QuantityType::One}
             };
 
             Ok((typ, qty))
@@ -352,9 +354,9 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
 
     quote! {
         #[automatically_derived]
-        impl #impl_generics ItemKindPropertyType for #ident #ty_generics #where_clause {
-            type PropertyType = flatpg::property::PropertyType;
-            type QuantityType = flatpg::property::QuantityType;
+        impl #impl_generics ::flatpg::prelude::ItemKindPropertyType for #ident #ty_generics #where_clause {
+            type PropertyType = ::flatpg::property::PropertyType;
+            type QuantityType = ::flatpg::property::QuantityType;
             fn property_type(&self) -> Self::PropertyType {
                 match self {
                     #(#prop_type_variants,)*

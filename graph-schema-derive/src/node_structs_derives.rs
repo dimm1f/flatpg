@@ -44,18 +44,18 @@ fn expand_node_structs(
     let schema_ty = &config.schema;
     let structs = vars.iter().map(|(v, struct_name)| {
         quote! {
-            #vis struct #struct_name<'a>(&'a flatpg::graph::Graph<#schema_ty>, usize);
+            #vis struct #struct_name<'a>(&'a ::flatpg::graph::Graph<#schema_ty>, usize);
 
             impl<'a> #struct_name<'a>
             {
-                #vis fn new(graph: &'a flatpg::graph::Graph<#schema_ty>, seq: usize) -> Self {
+                #vis fn new(graph: &'a ::flatpg::graph::Graph<#schema_ty>, seq: usize) -> Self {
                     Self(graph, seq)
                 }
             }
 
-            impl<'a> flatpg::node::StoredNode<#schema_ty> for #struct_name<'a> {
+            impl<'a> ::flatpg::node::StoredNode<#schema_ty> for #struct_name<'a> {
                 #[inline]
-                fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
+                fn graph(&self) -> &::flatpg::graph::Graph<#schema_ty> {
                     self.0
                 }
                 #[inline]
@@ -96,19 +96,23 @@ pub fn node_structs_derive(
     let builders_def = variants.iter().map(|(v, struct_name)| {
         let builder_name = node_builder_name(struct_name);
         quote! {
-            pub struct #builder_name(flatpg::node::NewNode<#schema_ty>);
+            pub struct #builder_name(::flatpg::node::NewNode<#schema_ty>);
 
             impl #builder_name {
                 pub fn new() -> Self {
-                    Self(flatpg::node::NewNode::new(#ident::#v))
+                    Self(::flatpg::node::NewNode::new(#ident::#v))
                 }
 
-                pub fn add_property<T: Into<flatpg::property::PropertyValue>>(mut self, prop_kind: #property_kind_ty, value: T) -> Result<Self, flatpg::error::Error> {
+                pub fn add_property<T: ::core::convert::Into<::flatpg::property::PropertyValue>>(
+                    mut self,
+                    prop_kind: #property_kind_ty,
+                    value: T,
+                ) -> ::core::result::Result<Self, ::flatpg::error::Error> {
                     self.0.add_property(prop_kind, value)?;
-                    Ok(self)
+                    ::core::result::Result::Ok(self)
                 }
 
-                pub fn build(self) -> flatpg::node::NewNode<#schema_ty> {
+                pub fn build(self) -> ::flatpg::node::NewNode<#schema_ty> {
                     self.0
                 }
             }
@@ -153,7 +157,11 @@ pub fn node_structs_derive(
         }
 
         impl<'a> Node<'a> {
-            #vis fn new(graph: &'a flatpg::graph::Graph<#schema_ty>, kind: #ident, seq: usize) -> Self {
+            #vis fn new(
+                graph: &'a ::flatpg::graph::Graph<#schema_ty>,
+                kind: #ident,
+                seq: usize,
+            ) -> Self {
                 match kind {
                     #(
                         #node_new_variants,
@@ -162,9 +170,9 @@ pub fn node_structs_derive(
             }
         }
 
-        impl<'a> flatpg::node::StoredNode<#schema_ty> for Node<'a> {
+        impl<'a> ::flatpg::node::StoredNode<#schema_ty> for Node<'a> {
 
-            fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
+            fn graph(&self) -> &::flatpg::graph::Graph<#schema_ty> {
                 match self {
                     #(
                         #match_node => node.graph(),
@@ -222,7 +230,9 @@ pub fn node_available_properties_derive(
     });
 
     Ok(quote! {
-        impl #impl_generics AvailableProperties<#property_kind_ty> for #name #ty_generics #where_clause {
+        impl #impl_generics ::flatpg::prelude::AvailableProperties<#property_kind_ty>
+            for #name #ty_generics #where_clause
+        {
             fn properties(&self) -> &'static [#property_kind_ty] {
                 match self {
                     #(#props_match_arms,)*

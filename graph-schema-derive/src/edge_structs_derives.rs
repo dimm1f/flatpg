@@ -63,12 +63,20 @@ fn build_edge_property_method(
 
     Ok(quote! {
         #deprecated
-        #vis fn property(#self_param) -> Result<Option<#elem_ty>, flatpg::error::Error> {
+        #vis fn property(
+            #self_param
+        ) -> ::core::result::Result<::core::option::Option<#elem_ty>, ::flatpg::error::Error> {
+            // Inherent method, so `graph`/`edge` have no supertrait to come from: import the
+            // trait anonymously rather than rely on the caller's scope.
+            use ::flatpg::edge::StoredEdge as _;
+
             self.graph()
                 .get_edge_property(self.edge())?
                 .map(|p| match p {
                     #pattern => #expr,
-                    other => Err(flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ())),
+                    other => ::core::result::Result::Err(
+                        ::flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ()),
+                    ),
                 })
                 .transpose()
         }
@@ -88,19 +96,19 @@ fn expand_edge_structs(
             let property_method = build_edge_property_method(attrs, schema_ty, vis)?;
             Ok(quote! {
                 #vis struct #struct_name<'a> {
-                    graph: &'a flatpg::graph::Graph<#schema_ty>,
-                    src_node: flatpg::node::NodeId<#schema_ty>,
-                    dst_node: flatpg::node::NodeId<#schema_ty>,
-                    direction: flatpg::edge::Direction,
+                    graph: &'a ::flatpg::graph::Graph<#schema_ty>,
+                    src_node: ::flatpg::node::NodeId<#schema_ty>,
+                    dst_node: ::flatpg::node::NodeId<#schema_ty>,
+                    direction: ::flatpg::edge::Direction,
                     seq: usize,
                 }
 
                 impl<'a> #struct_name<'a> {
                     #vis fn new(
-                        graph: &'a flatpg::graph::Graph<#schema_ty>,
-                        src_node: flatpg::node::NodeId<#schema_ty>,
-                        dst_node: flatpg::node::NodeId<#schema_ty>,
-                        direction: flatpg::edge::Direction,
+                        graph: &'a ::flatpg::graph::Graph<#schema_ty>,
+                        src_node: ::flatpg::node::NodeId<#schema_ty>,
+                        dst_node: ::flatpg::node::NodeId<#schema_ty>,
+                        direction: ::flatpg::edge::Direction,
                         seq: usize,
                     ) -> Self {
                         Self {
@@ -115,21 +123,21 @@ fn expand_edge_structs(
                     #property_method
                 }
 
-                impl<'a> flatpg::edge::StoredEdge<#schema_ty> for #struct_name<'a> {
+                impl<'a> ::flatpg::edge::StoredEdge<#schema_ty> for #struct_name<'a> {
                     #[inline]
-                    fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
+                    fn graph(&self) -> &::flatpg::graph::Graph<#schema_ty> {
                         self.graph
                     }
                     #[inline]
-                    fn src_node(&self) -> flatpg::node::NodeId<#schema_ty> {
+                    fn src_node(&self) -> ::flatpg::node::NodeId<#schema_ty> {
                         self.src_node
                     }
                     #[inline]
-                    fn dst_node(&self) -> flatpg::node::NodeId<#schema_ty> {
+                    fn dst_node(&self) -> ::flatpg::node::NodeId<#schema_ty> {
                         self.dst_node
                     }
                     #[inline]
-                    fn direction(&self) -> flatpg::edge::Direction {
+                    fn direction(&self) -> ::flatpg::edge::Direction {
                         self.direction
                     }
                     #[inline]
@@ -210,11 +218,11 @@ pub fn edge_structs_derive(
 
         impl<'a> Edge<'a> {
             #vis fn new(
-                graph: &'a flatpg::graph::Graph<#schema_ty>,
+                graph: &'a ::flatpg::graph::Graph<#schema_ty>,
                 kind: #ident,
-                src_node: flatpg::node::NodeId<#schema_ty>,
-                dst_node: flatpg::node::NodeId<#schema_ty>,
-                direction: flatpg::edge::Direction,
+                src_node: ::flatpg::node::NodeId<#schema_ty>,
+                dst_node: ::flatpg::node::NodeId<#schema_ty>,
+                direction: ::flatpg::edge::Direction,
                 seq: usize,
             ) -> Self {
                 match kind {
@@ -225,29 +233,29 @@ pub fn edge_structs_derive(
             }
         }
 
-        impl<'a> flatpg::edge::StoredEdge<#schema_ty> for Edge<'a> {
-            fn graph(&self) -> &flatpg::graph::Graph<#schema_ty> {
+        impl<'a> ::flatpg::edge::StoredEdge<#schema_ty> for Edge<'a> {
+            fn graph(&self) -> &::flatpg::graph::Graph<#schema_ty> {
                 match self {
                     #(
                         #match_edge => edge.graph(),
                     )*
                 }
             }
-            fn src_node(&self) -> flatpg::node::NodeId<#schema_ty> {
+            fn src_node(&self) -> ::flatpg::node::NodeId<#schema_ty> {
                 match self {
                     #(
                         #match_edge => edge.src_node(),
                     )*
                 }
             }
-            fn dst_node(&self) -> flatpg::node::NodeId<#schema_ty> {
+            fn dst_node(&self) -> ::flatpg::node::NodeId<#schema_ty> {
                 match self {
                     #(
                         #match_edge => edge.dst_node(),
                     )*
                 }
             }
-            fn direction(&self) -> flatpg::edge::Direction {
+            fn direction(&self) -> ::flatpg::edge::Direction {
                 match self {
                     #(
                         #match_edge => edge.direction(),

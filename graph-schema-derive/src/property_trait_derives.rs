@@ -78,57 +78,57 @@ pub(crate) fn property_binding(
     Ok(match typ_name {
         TYP_BOOL => PropertyBinding {
             elem_ty: quote!(bool),
-            pattern: quote!(flatpg::storage::StoredProperty::Bool(v)),
-            expr: quote!(Ok(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::Bool),
+            pattern: quote!(::flatpg::storage::StoredProperty::Bool(v)),
+            expr: quote!(::core::result::Result::Ok(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::Bool),
         },
         TYP_BYTE => PropertyBinding {
             elem_ty: quote!(u8),
-            pattern: quote!(flatpg::storage::StoredProperty::Byte(v)),
-            expr: quote!(Ok(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::Byte),
+            pattern: quote!(::flatpg::storage::StoredProperty::Byte(v)),
+            expr: quote!(::core::result::Result::Ok(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::Byte),
         },
         TYP_SHORT => PropertyBinding {
             elem_ty: quote!(i16),
-            pattern: quote!(flatpg::storage::StoredProperty::Short(v)),
-            expr: quote!(Ok(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::Short),
+            pattern: quote!(::flatpg::storage::StoredProperty::Short(v)),
+            expr: quote!(::core::result::Result::Ok(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::Short),
         },
         TYP_INT => PropertyBinding {
             elem_ty: quote!(i32),
-            pattern: quote!(flatpg::storage::StoredProperty::Int(v)),
-            expr: quote!(Ok(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::Int),
+            pattern: quote!(::flatpg::storage::StoredProperty::Int(v)),
+            expr: quote!(::core::result::Result::Ok(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::Int),
         },
         TYP_LONG => PropertyBinding {
             elem_ty: quote!(i64),
-            pattern: quote!(flatpg::storage::StoredProperty::Long(v)),
-            expr: quote!(Ok(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::Long),
+            pattern: quote!(::flatpg::storage::StoredProperty::Long(v)),
+            expr: quote!(::core::result::Result::Ok(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::Long),
         },
         TYP_FLOAT => PropertyBinding {
             elem_ty: quote!(f32),
-            pattern: quote!(flatpg::storage::StoredProperty::Float(v)),
-            expr: quote!(Ok(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::Float),
+            pattern: quote!(::flatpg::storage::StoredProperty::Float(v)),
+            expr: quote!(::core::result::Result::Ok(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::Float),
         },
         TYP_DOUBLE => PropertyBinding {
             elem_ty: quote!(f64),
-            pattern: quote!(flatpg::storage::StoredProperty::Double(v)),
-            expr: quote!(Ok(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::Double),
+            pattern: quote!(::flatpg::storage::StoredProperty::Double(v)),
+            expr: quote!(::core::result::Result::Ok(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::Double),
         },
         TYP_NODE_ID => PropertyBinding {
-            elem_ty: quote!(flatpg::node::NodeId<#schema_ty>),
-            pattern: quote!(flatpg::storage::StoredProperty::NodeId(v)),
-            expr: quote!(flatpg::node::NodeId::<#schema_ty>::try_from(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::NodeId),
+            elem_ty: quote!(::flatpg::node::NodeId<#schema_ty>),
+            pattern: quote!(::flatpg::storage::StoredProperty::NodeId(v)),
+            expr: quote!(::flatpg::node::NodeId::<#schema_ty>::try_from(v)),
+            prop_type_path: quote!(::flatpg::property::PropertyType::NodeId),
         },
         TYP_STRING => PropertyBinding {
             elem_ty: quote!(&str),
-            pattern: quote!(flatpg::storage::StoredProperty::StringId(v)),
+            pattern: quote!(::flatpg::storage::StoredProperty::StringId(v)),
             expr: quote!(self.graph().resolve_string(v)),
-            prop_type_path: quote!(flatpg::property::PropertyType::String),
+            prop_type_path: quote!(::flatpg::property::PropertyType::String),
         },
         TYP_ENUM => {
             let last_seg = typ
@@ -156,17 +156,25 @@ pub(crate) fn property_binding(
             let enum_name = quote!(#inner_ty).to_string();
             PropertyBinding {
                 elem_ty: quote!(#inner_ty),
-                pattern: quote!(flatpg::storage::StoredProperty::Enum(v)),
+                pattern: quote!(::flatpg::storage::StoredProperty::Enum(v)),
                 expr: quote! {
-                    if v.enum_property_index() == <#inner_ty as EnumPropertyIndex>::enum_property_index() {
-                        <#inner_ty as ItemFromIndex>::from_index(v.variant()).ok_or_else(|| {
-                            flatpg::error::Error::unresolved_enum_variant(#enum_name, v.variant())
-                        })
+                    if v.enum_property_index()
+                        == <#inner_ty as ::flatpg::prelude::EnumPropertyIndex>::enum_property_index()
+                    {
+                        <#inner_ty as ::flatpg::prelude::ItemFromIndex>::from_index(v.variant())
+                            .ok_or_else(|| {
+                                ::flatpg::error::Error::unresolved_enum_variant(#enum_name, v.variant())
+                            })
                     } else {
-                        Err(flatpg::error::Error::enum_property_index_mismatch(#enum_name, v.enum_property_index()))
+                        ::core::result::Result::Err(
+                            ::flatpg::error::Error::enum_property_index_mismatch(
+                                #enum_name,
+                                v.enum_property_index(),
+                            ),
+                        )
                     }
                 },
-                prop_type_path: quote!(flatpg::property::PropertyType::Enum),
+                prop_type_path: quote!(::flatpg::property::PropertyType::Enum),
             }
         }
         other => {
@@ -235,29 +243,43 @@ fn build_property_trait(
 
     let method = if is_multi {
         quote! {
-            fn #method_name #generics (#self_param) -> Result<Vec<#elem_ty>, flatpg::error::Error>
+            fn #method_name #generics (
+                #self_param
+            ) -> ::core::result::Result<::std::vec::Vec<#elem_ty>, ::flatpg::error::Error>
             #where_clause
             {
+                use ::core::iter::Iterator as _;
+
                 self.graph()
                     .get_node_property(self.node_id(), #enum_ident::#variant)?
                     .map(|p| match p {
                         #pattern => #expr,
-                        other => Err(flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ())),
+                        other => ::core::result::Result::Err(
+                            ::flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ()),
+                        ),
                     })
                     .collect()
             }
         }
     } else {
         quote! {
-            fn #method_name #generics (#self_param) -> Result<#elem_ty, flatpg::error::Error>
+            fn #method_name #generics (
+                #self_param
+            ) -> ::core::result::Result<#elem_ty, ::flatpg::error::Error>
             #where_clause
             {
+                use ::core::iter::Iterator as _;
+
                 self.graph()
                     .get_node_property(self.node_id(), #enum_ident::#variant)
                     .and_then(|mut p| match p.next() {
-                        Some(#pattern) => #expr,
-                        Some(other) => Err(flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ())),
-                        None => Err(flatpg::error::Error::property_index_not_found()),
+                        ::core::option::Option::Some(#pattern) => #expr,
+                        ::core::option::Option::Some(other) => ::core::result::Result::Err(
+                            ::flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ()),
+                        ),
+                        ::core::option::Option::None => ::core::result::Result::Err(
+                            ::flatpg::error::Error::property_index_not_found(),
+                        ),
                     })
             }
         }
@@ -265,7 +287,9 @@ fn build_property_trait(
 
     Ok(quote! {
         #deprecated
-        #vis trait #variant<S: flatpg::schema::Schema<P = #enum_ident>>: flatpg::node::StoredNode<S> {
+        #vis trait #variant<S: ::flatpg::schema::Schema<P = #enum_ident>>:
+            ::flatpg::node::StoredNode<S>
+        {
             #method
         }
     })

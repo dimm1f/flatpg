@@ -84,7 +84,12 @@ pub(crate) fn expand(def: RegistryDef) -> TokenStream {
 
     let RegistryDef { vis, ident, .. } = def;
     quote! {
-        #[derive(Debug, Clone, Copy, EnumPropertyRegistry)]
+        #[derive(
+            ::core::fmt::Debug,
+            ::core::clone::Clone,
+            ::core::marker::Copy,
+            ::flatpg::prelude::EnumPropertyRegistry,
+        )]
         #vis enum #ident {
             #(#variants,)*
         }

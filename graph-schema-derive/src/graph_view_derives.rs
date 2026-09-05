@@ -44,15 +44,17 @@ pub fn node_accessor_traits_derive(
         let trait_name = format_ident!("{}NodesAccessor", v);
         let method_name = method_ident(v);
         quote! {
-            #vis trait #trait_name: flatpg::graph::GraphView<#schema_ty> {
-                fn #method_name(&self) -> impl Iterator<Item = Node<'_>> + '_ {
+            #vis trait #trait_name: ::flatpg::graph::GraphView<#schema_ty> {
+                fn #method_name(&self) -> impl ::core::iter::Iterator<Item = Node<'_>> + '_ {
+                    use ::core::iter::Iterator as _;
+
                     self.graph()
                         .nodes_by_kind(#enum_ident::#v)
                         .map(|node| Node::new(self.graph(), node.kind(), node.seq()))
                 }
             }
 
-            impl<T: flatpg::graph::GraphView<#schema_ty>> #trait_name for T {}
+            impl<T: ::flatpg::graph::GraphView<#schema_ty>> #trait_name for T {}
         }
     });
 
@@ -65,15 +67,20 @@ pub fn edges_accessor_trait_derive(input: &ItemEnum, config: &EdgeKindConfig) ->
     let schema_ty = &config.schema;
 
     quote! {
-        #vis trait EdgesAccessor: flatpg::graph::GraphView<#schema_ty> {
+        #vis trait EdgesAccessor: ::flatpg::graph::GraphView<#schema_ty> {
             fn edges<'a>(
                 &'a self,
-                src_node: flatpg::node::NodeId<#schema_ty>,
+                src_node: ::flatpg::node::NodeId<#schema_ty>,
                 edge_kind: #enum_ident,
-                direction: flatpg::edge::Direction,
-            ) -> Result<impl ExactSizeIterator<Item = Edge<'a>> + 'a, flatpg::error::Error> {
+                direction: ::flatpg::edge::Direction,
+            ) -> ::core::result::Result<
+                impl ::core::iter::ExactSizeIterator<Item = Edge<'a>> + 'a,
+                ::flatpg::error::Error,
+            > {
+                use ::core::iter::Iterator as _;
+
                 let graph = self.graph();
-                Ok(graph
+                ::core::result::Result::Ok(graph
                     .get_edges(src_node, edge_kind, direction)?
                     .map(move |e| {
                         Edge::new(
@@ -88,7 +95,7 @@ pub fn edges_accessor_trait_derive(input: &ItemEnum, config: &EdgeKindConfig) ->
             }
         }
 
-        impl<T: flatpg::graph::GraphView<#schema_ty>> EdgesAccessor for T {}
+        impl<T: ::flatpg::graph::GraphView<#schema_ty>> EdgesAccessor for T {}
     }
 }
 

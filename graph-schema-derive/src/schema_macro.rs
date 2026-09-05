@@ -163,7 +163,7 @@ pub(crate) fn expand(def: SchemaDef) -> TokenStream {
 
     let epr = match enum_prop_registry {
         Some(registry) => quote!(#registry),
-        None => quote!(flatpg::enum_property::NoEnumProps),
+        None => quote!(::flatpg::enum_property::NoEnumProps),
     };
 
     let (major, minor, patch) = match parse_version(&version) {
@@ -174,10 +174,15 @@ pub(crate) fn expand(def: SchemaDef) -> TokenStream {
     let name_str = name.to_string();
 
     quote! {
-        #[derive(Clone, Copy, Default, Debug)]
+        #[derive(
+            ::core::clone::Clone,
+            ::core::marker::Copy,
+            ::core::default::Default,
+            ::core::fmt::Debug,
+        )]
         #vis struct #name;
 
-        impl flatpg::schema::Schema for #name {
+        impl ::flatpg::schema::Schema for #name {
             type N = #node_kind;
             type E = #edge_kind;
             type P = #prop_kind;
@@ -185,8 +190,8 @@ pub(crate) fn expand(def: SchemaDef) -> TokenStream {
 
             const NAME: &'static str = #name_str;
 
-            const VERSION: flatpg::schema::Version =
-                flatpg::schema::Version::new(#major, #minor, #patch);
+            const VERSION: ::flatpg::schema::Version =
+                ::flatpg::schema::Version::new(#major, #minor, #patch);
         }
     }
 }

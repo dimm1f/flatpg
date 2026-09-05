@@ -44,38 +44,46 @@ pub fn enum_property_registry_derive(input: &ItemEnum) -> TokenStream {
             .iter()
             .zip(enum_types.iter())
             .map(|(variant_ident, enum_ty)| {
-                quote! { Self::#variant_ident => <#enum_ty as ItemAll>::all().len(), }
+                quote! {
+                    Self::#variant_ident => <#enum_ty as ::flatpg::prelude::ItemAll>::all().len(),
+                }
             });
 
     let impls = enum_types.iter().enumerate().map(|(i, enum_ty)| {
         let enum_name = quote!(#enum_ty).to_string();
         quote! {
             #[automatically_derived]
-            impl EnumPropertyIndex for #enum_ty {
+            impl ::flatpg::prelude::EnumPropertyIndex for #enum_ty {
                 fn enum_property_index() -> usize {
                     #i
                 }
             }
 
             #[automatically_derived]
-            impl TryFrom<flatpg::property::PropertyValue> for #enum_ty {
-                type Error = flatpg::error::Error;
-                fn try_from(value: flatpg::property::PropertyValue) -> Result<Self, Self::Error> {
+            impl ::core::convert::TryFrom<::flatpg::property::PropertyValue> for #enum_ty {
+                type Error = ::flatpg::error::Error;
+                fn try_from(
+                    value: ::flatpg::property::PropertyValue,
+                ) -> ::core::result::Result<Self, Self::Error> {
                     match value {
-                        flatpg::property::PropertyValue::Enum(v)
-                            if v.enum_property_index() == <#enum_ty as EnumPropertyIndex>::enum_property_index() =>
+                        ::flatpg::property::PropertyValue::Enum(v)
+                            if v.enum_property_index()
+                                == <#enum_ty as ::flatpg::prelude::EnumPropertyIndex>::enum_property_index() =>
                         {
-                            <#enum_ty as ItemFromIndex>::from_index(v.variant()).ok_or_else(|| {
-                                flatpg::error::Error::unresolved_enum_variant(#enum_name, v.variant())
-                            })
+                            <#enum_ty as ::flatpg::prelude::ItemFromIndex>::from_index(v.variant())
+                                .ok_or_else(|| {
+                                    ::flatpg::error::Error::unresolved_enum_variant(#enum_name, v.variant())
+                                })
                         }
-                        flatpg::property::PropertyValue::Enum(v) => Err(
-                            flatpg::error::Error::enum_property_index_mismatch(#enum_name, v.enum_property_index()),
+                        ::flatpg::property::PropertyValue::Enum(v) => ::core::result::Result::Err(
+                            ::flatpg::error::Error::enum_property_index_mismatch(#enum_name, v.enum_property_index()),
                         ),
-                        other => Err(flatpg::error::Error::invalid_property_type(
-                            flatpg::property::PropertyType::Enum,
-                            other.typ(),
-                        )),
+                        other => ::core::result::Result::Err(
+                            ::flatpg::error::Error::invalid_property_type(
+                                ::flatpg::property::PropertyType::Enum,
+                                other.typ(),
+                            ),
+                        ),
                     }
                 }
             }
@@ -86,7 +94,7 @@ pub fn enum_property_registry_derive(input: &ItemEnum) -> TokenStream {
         #(#impls)*
 
         #[automatically_derived]
-        impl #impl_generics EnumPropertyRegistry for #ident #ty_generics #where_clause {
+        impl #impl_generics ::flatpg::prelude::EnumPropertyRegistry for #ident #ty_generics #where_clause {
             fn variant_count(&self) -> usize {
                 match *self {
                     #(#variant_count_arms)*

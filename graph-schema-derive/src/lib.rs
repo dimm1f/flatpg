@@ -79,7 +79,8 @@ pub fn node_kind_derive(input: TokenStream) -> TokenStream {
         #node_structs
         #node_accessor_traits
 
-        impl #impl_generics NodeItemKind<flatpg::schema::PropKind<#schema_ty>> for #ident #ty_generics #where_clause {}
+        impl #impl_generics ::flatpg::prelude::NodeItemKind<::flatpg::schema::PropKind<#schema_ty>>
+            for #ident #ty_generics #where_clause {}
     }
     .into()
 }
@@ -115,7 +116,7 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
         #edge_structs
         #edges_accessor
 
-        impl #impl_generics EdgeItemKind for #name #ty_generics #where_clause {}
+        impl #impl_generics ::flatpg::prelude::EdgeItemKind for #name #ty_generics #where_clause {}
     }
     .into()
 }
@@ -139,7 +140,7 @@ pub fn enum_property_derive(input: TokenStream) -> TokenStream {
         #enum_item_as_str
         #enum_item_from_str
 
-        impl #impl_generics EnumProperty for #ident #ty_generics #where_clause {}
+        impl #impl_generics ::flatpg::prelude::EnumProperty for #ident #ty_generics #where_clause {}
     }
     .into()
 }
@@ -202,7 +203,7 @@ pub fn property_kind_derive(input: TokenStream) -> TokenStream {
         #enum_item_property_type
         #property_traits
 
-        impl #impl_generics PropertyItemKind for #name #ty_generics #where_clause {}
+        impl #impl_generics ::flatpg::prelude::PropertyItemKind for #name #ty_generics #where_clause {}
     }
     .into()
 }

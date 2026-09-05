@@ -4,7 +4,7 @@
 //! (each its own compilation unit) can depend on the same definitions instead
 //! of duplicating them.
 
-use flatpg::{edge::StoredEdge, prelude::*, schema::Schema};
+use flatpg::{prelude::*, schema::Schema};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumProperty)]
 pub enum Status {
