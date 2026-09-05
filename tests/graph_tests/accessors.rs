@@ -7,7 +7,7 @@ use flatpg::{
 };
 use test_fixtures::*;
 
-use crate::common::string_value;
+use crate::common::{collect_edges, string_value};
 
 #[test]
 fn edge_property_is_visible_from_both_endpoints() {
@@ -34,9 +34,7 @@ fn edge_property_is_visible_from_both_endpoints() {
         .next()
         .expect("Beta node");
 
-    let mut out_edges = graph
-        .get_edges(alpha, TestEdge::Labeled, Direction::Out)
-        .expect("out edges");
+    let mut out_edges = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out);
     assert_eq!(out_edges.len(), 1);
     let out_prop = graph
         .get_edge_property(out_edges.remove(0))
@@ -44,9 +42,7 @@ fn edge_property_is_visible_from_both_endpoints() {
         .expect("property from Out perspective");
     assert_eq!(string_value(&graph, out_prop), "p0");
 
-    let mut in_edges = graph
-        .get_edges(beta, TestEdge::Labeled, Direction::In)
-        .expect("in edges");
+    let mut in_edges = collect_edges(&graph, beta, TestEdge::Labeled, Direction::In);
     assert_eq!(in_edges.len(), 1);
     let in_prop = graph
         .get_edge_property(in_edges.remove(0))
@@ -75,9 +71,7 @@ fn stored_edge_struct_and_edge_enum_match_graph_get_edges() {
         .nodes_by_kind(TestNode::Alpha)
         .next()
         .expect("Alpha node");
-    let edge_id = graph
-        .get_edges(alpha, TestEdge::Labeled, Direction::Out)
-        .expect("out edges")
+    let edge_id = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out)
         .into_iter()
         .next()
         .expect("one edge");
@@ -142,9 +136,7 @@ fn in_edge_properties_match_their_edges() {
         .nodes_by_kind(TestNode::Beta)
         .next()
         .expect("Beta node");
-    let in_edges = graph
-        .get_edges(beta, TestEdge::Labeled, Direction::In)
-        .expect("in edges");
+    let in_edges = collect_edges(&graph, beta, TestEdge::Labeled, Direction::In);
     assert_eq!(in_edges.len(), 2);
 
     for edge in in_edges {
@@ -185,18 +177,19 @@ fn stored_node_edge_accessors_return_incident_edges() {
     let alpha0 = AlphaNode::new(&graph, 0);
     let beta = BetaNode::new(&graph, 0);
 
-    let out_edges = alpha0
+    let out_edges: Vec<_> = alpha0
         .get_edges_out(TestEdge::Labeled)
-        .expect("alpha0 out edges");
+        .expect("alpha0 out edges")
+        .collect();
     assert_eq!(out_edges.len(), 1);
     assert_eq!(out_edges[0].src_node().kind(), TestNode::Alpha);
     assert_eq!(out_edges[0].src_node().seq(), 0);
     assert_eq!(out_edges[0].dst_node().kind(), TestNode::Beta);
     assert_eq!(out_edges[0].dst_node().seq(), 0);
 
-    let in_edges = beta.get_edges_in(TestEdge::Labeled).expect("beta in edges");
-    let mut src_seqs: Vec<usize> = in_edges
-        .iter()
+    let mut src_seqs: Vec<usize> = beta
+        .get_edges_in(TestEdge::Labeled)
+        .expect("beta in edges")
         .map(|edge| {
             assert_eq!(edge.src_node().kind(), TestNode::Alpha);
             edge.src_node().seq()
@@ -205,15 +198,17 @@ fn stored_node_edge_accessors_return_incident_edges() {
     src_seqs.sort_unstable();
     assert_eq!(src_seqs, vec![0, 1]);
 
-    assert!(
+    assert_eq!(
         alpha0
             .get_edges_in(TestEdge::Labeled)
             .expect("alpha0 in edges")
-            .is_empty()
+            .len(),
+        0
     );
-    assert!(
+    assert_eq!(
         beta.get_edges_out(TestEdge::Labeled)
             .expect("beta out edges")
-            .is_empty()
+            .len(),
+        0
     );
 }

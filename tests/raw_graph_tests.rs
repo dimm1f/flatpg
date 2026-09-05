@@ -2,6 +2,7 @@ use flatpg::{
     edge::Direction,
     error::Error,
     graph::{Graph, builder::GraphDiff, raw::RawGraph},
+    node::RawNodeId,
     prelude::*,
     property::PropertyValue,
     schema::Schema,
@@ -252,6 +253,35 @@ fn dangling_node_id_out_of_bounds_is_rejected() {
         .err()
         .expect("expected an error");
     assert!(matches!(err, Error::NodeSeqOutOfBounds { .. }));
+}
+
+/// The other half of `check_node_id`'s contract, next to
+/// `dangling_node_id_out_of_bounds_is_rejected`: a neighbor whose kind index names no
+/// registered node kind is rejected on the way in. `Graph::get_edges` leans on this check to
+/// resolve neighbor kinds without a per-item `Result`.
+#[test]
+fn neighbor_with_unresolvable_node_kind_is_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+    setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let out_plain_index =
+        TestSchema::edge_storage_slot(TestNode::Alpha, Direction::Out, TestEdge::Plain).index();
+    // Overwritten in place so the slot's offsets and lengths stay valid, and the rejection
+    // comes from the kind index rather than from a shape check that fires earlier.
+    raw.edge_storage[out_plain_index].neighbors_mut()[0] =
+        RawNodeId::new(TestSchema::number_of_node_kinds(), 0);
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    assert!(matches!(err, Error::UnresolvedNodeKind(_)));
 }
 
 #[test]

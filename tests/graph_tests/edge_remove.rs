@@ -7,7 +7,7 @@ use flatpg::{
 };
 use test_fixtures::*;
 
-use crate::common::{out_edge_dst_seqs, setup_graph_with_fan_out_edges};
+use crate::common::{collect_edges, out_edge_dst_seqs, setup_graph_with_fan_out_edges};
 
 /// Locks in the other documented gotcha from `GraphDiff::apply`'s doc comment: a stale
 /// `EdgeId` from before an earlier `apply` call's own removal can make `remove_edge`'s
@@ -18,9 +18,7 @@ fn remove_edge_with_id_captured_before_earlier_removal_corrupts_the_graph() {
     let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
     let (beta1, beta2) = (betas[1], betas[2]);
 
-    let mut edges = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges");
+    let mut edges = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out);
     edges.sort_by_key(|e| e.seq());
     // Captured against the pre-removal graph: `stale` names whatever edge is at local
     // position 1 (beta1) right now. `first` (position 0, beta0) is removed below.
@@ -36,9 +34,7 @@ fn remove_edge_with_id_captured_before_earlier_removal_corrupts_the_graph() {
         .check_integrity()
         .expect("graph passes integrity check");
     // beta2's edge has now shifted down into position 1, the position `stale` points at.
-    let shifted = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let shifted = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .find(|e| e.seq() == stale_local_seq)
         .expect("an edge now occupies the stale position");
@@ -79,9 +75,7 @@ fn remove_first_of_many_out_edges_preserves_others() {
     let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
     let (beta0, beta1, beta2) = (betas[0], betas[1], betas[2]);
 
-    let edge_to_b0 = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_to_b0 = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .find(|e| e.dst_node().seq() == beta0.seq())
         .expect("edge to beta0");
@@ -124,9 +118,7 @@ fn remove_middle_of_many_out_edges_preserves_others() {
     let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
     let (beta0, beta1, beta2) = (betas[0], betas[1], betas[2]);
 
-    let edge_to_b1 = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_to_b1 = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .find(|e| e.dst_node().seq() == beta1.seq())
         .expect("edge to beta1");
@@ -157,9 +149,7 @@ fn remove_last_of_many_out_edges_preserves_others() {
     let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
     let (beta0, beta1, beta2) = (betas[0], betas[1], betas[2]);
 
-    let edge_to_b2 = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_to_b2 = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .find(|e| e.dst_node().seq() == beta2.seq())
         .expect("edge to beta2");
@@ -205,9 +195,7 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
         .next()
         .expect("Beta node");
 
-    let edges = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges");
+    let edges = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out);
     let mut diff2 = GraphDiff::<TestSchema>::default();
     diff2.remove_edge(edges.into_iter().next().unwrap());
     let (graph, _) = diff2.apply(graph).expect("apply diff 2");

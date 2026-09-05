@@ -140,7 +140,8 @@ fn main() {
 
     let base_edges = graph
         .edges(alpha_node, SimpleEdge::Base, Direction::Out)
-        .expect("alpha's outgoing Base Edges");
+        .expect("alpha's outgoing Base Edges")
+        .collect::<Vec<_>>();
     let [Edge::Base(base)] = base_edges.as_slice() else {
         panic!("expected exactly one Edge::Base");
     };
@@ -153,7 +154,8 @@ fn main() {
 
     let extended_edges = graph
         .edges(alpha_node, SimpleEdge::Extended, Direction::In)
-        .expect("alpha's incoming Extended Edges");
+        .expect("alpha's incoming Extended Edges")
+        .collect::<Vec<_>>();
     let [Edge::Extended(extended)] = extended_edges.as_slice() else {
         panic!("expected exactly one Edge::Extended");
     };

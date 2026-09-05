@@ -1,5 +1,5 @@
 use flatpg::{
-    edge::Direction,
+    edge::{Direction, EdgeId},
     graph::{Graph, builder::GraphDiff},
     node::NodeId,
     prelude::*,
@@ -60,10 +60,20 @@ pub fn setup_graph_with_fan_out_edges() -> (
     (graph, alpha, betas)
 }
 
-pub fn out_edge_dst_seqs(graph: &Graph<TestSchema>, alpha: NodeId<TestSchema>) -> Vec<usize> {
+pub fn collect_edges(
+    graph: &Graph<TestSchema>,
+    node: NodeId<TestSchema>,
+    edge_kind: TestEdge,
+    direction: Direction,
+) -> Vec<EdgeId<TestSchema>> {
     graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+        .get_edges(node, edge_kind, direction)
+        .expect("edge lookup")
+        .collect()
+}
+
+pub fn out_edge_dst_seqs(graph: &Graph<TestSchema>, alpha: NodeId<TestSchema>) -> Vec<usize> {
+    collect_edges(graph, alpha, TestEdge::Plain, Direction::Out)
         .iter()
         .map(|e| e.dst_node().seq())
         .collect()

@@ -1,6 +1,6 @@
 use crate::{
     EdgeDirectionKind, ItemIndex,
-    edge::{Direction, EdgeHandle, EdgeId},
+    edge::{Direction, EdgeId},
     error::Error,
     graph::integrity::{CheckIntegrity, check_integrity},
     node::{NodeId, NodeMeta, RawNodeId},
@@ -160,30 +160,42 @@ impl<S: Schema> Graph<S> {
         }
     }
 
+    /// Returns `src_node`'s `edge_kind` half-edges for `direction`.
+    ///
+    /// The iterator borrows the adjacency list in place and allocates nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a neighbor's stored node kind is not part of the schema. Every way of
+    /// building a [`Graph`] rejects such a neighbor first, so a graph obtained through this
+    /// crate's API cannot hold one.
     pub fn get_edges(
         &self,
         src_node: NodeId<S>,
         edge_kind: EdgeKind<S>,
         direction: Direction,
-    ) -> Result<Vec<EdgeId<S>>, Error> {
+    ) -> Result<impl ExactSizeIterator<Item = EdgeId<S>>, Error> {
         let slot_index = S::edge_storage_slot(src_node.kind(), direction, edge_kind);
         let slot = &self.edge_storage[slot_index.index()];
         let (start, end) = self.get_edges_offset((&src_node).into(), slot)?;
 
-        let length = end.checked_sub(start)?;
+        // `get_neighbors` clamps a reversed range to an empty slice, so without this check a
+        // broken offsets array would read as "this node has no edges" rather than as an error.
+        end.checked_sub(start)?;
 
-        let neighbors = slot.get_neighbors(start, end);
+        Ok(slot
+            .get_neighbors(start, end)
+            .enumerate()
+            .map(move |(seq, neighbor)| {
+                // Panic: every path into a `Graph<S>` validates neighbor kinds — `GraphDiff::apply`
+                // drops an edge whose endpoint does not resolve, and `TryFrom<RawGraph<S>>` runs
+                // `check_integrity`, which resolves the kind of every neighbor via `check_node_id`.
+                let neighbor = neighbor
+                    .try_into()
+                    .expect("neighbor kind checked on graph construction");
 
-        let mut result = Vec::with_capacity(length);
-
-        for (i, dst_node) in neighbors.enumerate() {
-            let edge_handle = EdgeHandle::new(edge_kind.index(), direction.factor(), i);
-            let edge =
-                S::make_edge((&src_node).into(), dst_node, direction, edge_handle).try_into()?;
-
-            result.push(edge);
-        }
-        Ok(result)
+                EdgeId::from_half(src_node, neighbor, edge_kind, direction, seq)
+            }))
     }
 
     /// Returns the raw property attached to `edge`, or `Ok(None)` when the edge's

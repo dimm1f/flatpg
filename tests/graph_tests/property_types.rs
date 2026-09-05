@@ -7,6 +7,8 @@ use flatpg::{
 };
 use test_fixtures::*;
 
+use crate::common::collect_edges;
+
 #[test]
 fn gamma_node_scalar_properties_round_trip() {
     let mut diff = GraphDiff::<TestSchema>::default();
@@ -152,9 +154,7 @@ fn edge_scalar_properties_round_trip() {
         .expect("Alpha node");
 
     let edge_of = |kind: TestEdge| {
-        graph
-            .get_edges(alpha, kind, Direction::Out)
-            .expect("out edges")
+        collect_edges(&graph, alpha, kind, Direction::Out)
             .into_iter()
             .next()
             .expect("one edge")
@@ -263,9 +263,7 @@ fn edge_with_node_id_property_round_trips() {
         .check_integrity()
         .expect("graph passes integrity check");
 
-    let edge_id = graph
-        .get_edges(alpha, TestEdge::RefersTo, Direction::Out)
-        .expect("out edges")
+    let edge_id = collect_edges(&graph, alpha, TestEdge::RefersTo, Direction::Out)
         .into_iter()
         .next()
         .expect("one edge");
@@ -310,9 +308,7 @@ fn edge_with_enum_property_round_trips() {
         .next()
         .expect("Alpha node");
 
-    let edge_id = graph
-        .get_edges(alpha, TestEdge::Tagged, Direction::Out)
-        .expect("out edges")
+    let edge_id = collect_edges(&graph, alpha, TestEdge::Tagged, Direction::Out)
         .into_iter()
         .next()
         .expect("one edge");

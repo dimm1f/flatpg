@@ -8,7 +8,7 @@ use flatpg::{
 };
 use test_fixtures::*;
 
-use crate::common::{out_edge_dst_seqs, setup_three_file_nodes, string_value};
+use crate::common::{collect_edges, out_edge_dst_seqs, setup_three_file_nodes, string_value};
 
 #[test]
 fn add_edge_between_new_nodes() {
@@ -65,9 +65,7 @@ fn add_edge_endpoints_are_correct() {
         .next()
         .expect("Beta node");
 
-    let out_edges = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges");
+    let out_edges = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out);
     assert_eq!(out_edges.len(), 1);
     assert_eq!(out_edges[0].src_node().kind(), TestNode::Alpha);
     assert_eq!(out_edges[0].src_node().seq(), alpha.seq());
@@ -314,9 +312,7 @@ fn add_edge_with_property_stores_property() {
         .nodes_by_kind(TestNode::Alpha)
         .next()
         .expect("Alpha node");
-    let edges = graph
-        .get_edges(alpha, TestEdge::Labeled, Direction::Out)
-        .expect("out edges");
+    let edges = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out);
     assert_eq!(edges.len(), 1);
 
     let property = graph

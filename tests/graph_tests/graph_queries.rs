@@ -7,7 +7,7 @@ use flatpg::{
 };
 use test_fixtures::*;
 
-use crate::common::{setup_graph_with_fan_out_edges, setup_three_file_nodes};
+use crate::common::{collect_edges, setup_graph_with_fan_out_edges, setup_three_file_nodes};
 
 #[test]
 fn graph_default_matches_a_freshly_built_empty_graph() {
@@ -172,4 +172,42 @@ fn resolve_property_converts_every_stored_property_variant() {
         resolved(TestProperty::LinkedNode),
         PropertyValue::NodeId(_)
     ));
+}
+
+/// Locks the orientation contract `get_edge_property` depends on: whichever endpoint a
+/// half-edge was queried from, `orient_edge` must hand that same node back.
+#[test]
+fn both_halves_of_an_edge_orient_back_to_the_node_they_were_queried_from() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta = diff.add_node(builders::BetaNodeBuilder::new().build());
+    diff.add_edge(alpha, beta, TestEdge::Plain, None);
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
+
+    let alpha = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+    let beta = graph
+        .nodes_by_kind(TestNode::Beta)
+        .next()
+        .expect("Beta node");
+
+    for (queried, other, direction) in [(alpha, beta, Direction::Out), (beta, alpha, Direction::In)]
+    {
+        let edge = collect_edges(&graph, queried, TestEdge::Plain, direction)
+            .into_iter()
+            .next()
+            .expect("one edge");
+
+        assert_eq!(RawNodeId::from(&edge.src_node()), RawNodeId::from(&alpha));
+        assert_eq!(RawNodeId::from(&edge.dst_node()), RawNodeId::from(&beta));
+
+        let (near, near_direction, far, _) = edge
+            .direction()
+            .orient_edge((&edge.src_node()).into(), (&edge.dst_node()).into());
+        assert_eq!(near, RawNodeId::from(&queried));
+        assert_eq!(near_direction, direction);
+        assert_eq!(far, RawNodeId::from(&other));
+    }
 }

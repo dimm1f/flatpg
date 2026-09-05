@@ -10,7 +10,7 @@ use flatpg::{
 };
 use test_fixtures::*;
 
-use crate::common::{out_edge_dst_seqs, setup_graph_with_fan_out_edges};
+use crate::common::{collect_edges, out_edge_dst_seqs, setup_graph_with_fan_out_edges};
 
 #[test]
 fn remove_existing_and_add_new_edge_sharing_an_edge_slot_in_one_diff() {
@@ -21,9 +21,7 @@ fn remove_existing_and_add_new_edge_sharing_an_edge_slot_in_one_diff() {
     let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
     let (beta0, beta1, beta2) = (betas[0], betas[1], betas[2]);
 
-    let edge_to_b1 = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_to_b1 = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .find(|e| e.dst_node().seq() == beta1.seq())
         .expect("edge to beta1");
@@ -204,9 +202,7 @@ fn update_same_property_multiple_times_in_one_diff_keeps_only_last_value() {
 fn remove_two_out_edges_from_same_node_in_ascending_order_in_one_diff() {
     let (graph, alpha, _betas) = setup_graph_with_fan_out_edges();
 
-    let mut edges = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges");
+    let mut edges = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out);
     edges.sort_by_key(|e| e.seq());
     let removed_dsts: Vec<NodeId<TestSchema>> = edges[..2].iter().map(|e| e.dst_node()).collect();
     let survivor = edges[2].dst_node();
@@ -264,15 +260,11 @@ fn apply_mixed_scattered_changes_to_one_diff_updates_each_node_correctly() {
         .expect("Alpha node");
     let betas: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::Beta).collect();
 
-    let edge_to_beta0 = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_to_beta0 = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .find(|e| e.dst_node().seq() == betas[0].seq())
         .expect("edge to beta0");
-    let edge_to_beta2 = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_to_beta2 = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .find(|e| e.dst_node().seq() == betas[2].seq())
         .expect("edge to beta2");
@@ -339,15 +331,11 @@ fn node_as_primary_in_one_removed_edge_and_secondary_in_another_in_one_diff() {
         .next()
         .expect("Beta node");
 
-    let edge_a_to_b = graph
-        .get_edges(a, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_a_to_b = collect_edges(&graph, a, TestEdge::Plain, Direction::Out)
         .into_iter()
         .next()
         .expect("edge a->b");
-    let edge_b_to_c = graph
-        .get_edges(b, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let edge_b_to_c = collect_edges(&graph, b, TestEdge::Plain, Direction::Out)
         .into_iter()
         .next()
         .expect("edge b->c");
@@ -407,15 +395,11 @@ fn removing_the_same_edge_twice_in_one_diff_collapses_into_one_removal() {
         .expect("Beta node");
     // Two independent EdgeId lookups against the same untouched graph, both resolving to
     // the same underlying half-edge.
-    let first = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let first = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .next()
         .expect("edge a->b");
-    let second = graph
-        .get_edges(alpha, TestEdge::Plain, Direction::Out)
-        .expect("out edges")
+    let second = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
         .into_iter()
         .next()
         .expect("edge a->b");

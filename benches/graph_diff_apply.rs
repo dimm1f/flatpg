@@ -222,10 +222,11 @@ fn bench_remove_edge(c: &mut Criterion) {
                     let mut diff = GraphDiff::<TestSchema>::default();
                     for j in 0..k {
                         let node = ids[(j * stride) % ids.len()];
-                        let edges = graph
+                        if let Some(edge) = graph
                             .get_edges(node, TestEdge::Labeled, Direction::Out)
-                            .expect("out edges");
-                        if let Some(edge) = edges.into_iter().next() {
+                            .expect("out edges")
+                            .next()
+                        {
                             diff.remove_edge(edge);
                         }
                     }

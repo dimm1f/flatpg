@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use crate::edge::{Direction, EdgeHandle, RawEdgeId};
+use crate::edge::{Direction, EdgeHandle};
 use crate::error::Error;
 use crate::node::RawNodeId;
 use crate::property::PropertyType;
@@ -115,16 +115,6 @@ pub trait Schema: Sized + Clone + Copy + Debug {
         Self::VERSION
     }
 
-    /// Builds a [`RawEdgeId`] from a source node, a destination node, a direction, and an edge handle.
-    fn make_edge(
-        src_node_ref: RawNodeId,
-        dst_node_ref: RawNodeId,
-        direction: Direction,
-        edge_handle: EdgeHandle,
-    ) -> RawEdgeId {
-        Direction::make_edge(src_node_ref, dst_node_ref, direction, edge_handle)
-    }
-
     /// Converts a [`RawNodeId`] to its typed node kind.
     ///
     /// Returns an error if the kind index stored in the ref does not map to any known node kind.
@@ -133,18 +123,18 @@ pub trait Schema: Sized + Clone + Copy + Debug {
             .ok_or_else(|| Error::unresolved_node_kind(node_ref.kind()))
     }
 
-    /// Converts a [`RawEdgeId`] to its typed edge kind.
+    /// Converts an [`EdgeHandle`] to its typed edge kind.
     ///
-    /// Reads the kind index from the ref and looks it up via [`Schema::edge_kind_by_index`].
+    /// Reads the kind index from the handle and looks it up via [`Schema::edge_kind_by_index`].
     /// Returns an error if the index does not map to any known edge kind in this schema.
     fn resolve_edge_kind(edge_handle: EdgeHandle) -> Result<Self::E, Error> {
         Self::edge_kind_by_index(edge_handle.kind())
             .ok_or_else(|| Error::unresolved_edge_kind(edge_handle.kind()))
     }
 
-    /// Converts a [`RawEdgeId`] to its typed edge direction.
+    /// Converts an [`EdgeHandle`] to its typed edge direction.
     ///
-    /// Reads the direction index from the ref and looks it up via [`Schema::direction_by_index`].
+    /// Reads the direction index from the handle and looks it up via [`Schema::direction_by_index`].
     /// Returns an error if the index does not map to any known direction in this schema.
     fn resolve_edge_direction(edge_handle: EdgeHandle) -> Result<Direction, Error> {
         Self::direction_by_index(edge_handle.direction())

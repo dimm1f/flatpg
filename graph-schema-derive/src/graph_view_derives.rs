@@ -66,17 +66,16 @@ pub fn edges_accessor_trait_derive(input: &ItemEnum, config: &EdgeKindConfig) ->
 
     quote! {
         #vis trait EdgesAccessor: flatpg::graph::GraphView<#schema_ty> {
-            fn edges(
-                &self,
+            fn edges<'a>(
+                &'a self,
                 src_node: flatpg::node::NodeId<#schema_ty>,
                 edge_kind: #enum_ident,
                 direction: flatpg::edge::Direction,
-            ) -> Result<Vec<Edge<'_>>, flatpg::error::Error> {
+            ) -> Result<impl ExactSizeIterator<Item = Edge<'a>> + 'a, flatpg::error::Error> {
                 let graph = self.graph();
                 Ok(graph
                     .get_edges(src_node, edge_kind, direction)?
-                    .into_iter()
-                    .map(|e| {
+                    .map(move |e| {
                         Edge::new(
                             graph,
                             e.kind(),
@@ -85,8 +84,7 @@ pub fn edges_accessor_trait_derive(input: &ItemEnum, config: &EdgeKindConfig) ->
                             e.direction(),
                             e.seq(),
                         )
-                    })
-                    .collect())
+                    }))
             }
         }
 

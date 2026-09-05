@@ -50,21 +50,6 @@ impl EdgeDirectionKind for Direction {
         }
     }
 
-    fn make_edge(src: RawNodeId, dst: RawNodeId, direction: Self, handle: EdgeHandle) -> RawEdgeId {
-        match direction {
-            Direction::In => RawEdgeId {
-                src_node_id: dst,
-                dst_node_id: src,
-                handle,
-            },
-            Direction::Out => RawEdgeId {
-                src_node_id: src,
-                dst_node_id: dst,
-                handle,
-            },
-        }
-    }
-
     fn src_half() -> Self {
         Self::Out
     }
@@ -203,6 +188,26 @@ impl<S: Schema> EdgeId<S> {
             direction,
             seq,
         }
+    }
+
+    /// Builds a half-edge from the two nodes it joins.
+    ///
+    /// `near` is the node whose adjacency list the half-edge was read from and `far` the
+    /// neighbor stored there; `direction` decides which of the two becomes `src_node`. This
+    /// is the inverse of [`EdgeDirectionKind::orient_edge`].
+    pub(crate) fn from_half(
+        near: NodeId<S>,
+        far: NodeId<S>,
+        kind: EdgeKind<S>,
+        direction: Direction,
+        seq: usize,
+    ) -> Self {
+        let (src_node, dst_node) = match direction {
+            Direction::Out => (near, far),
+            Direction::In => (far, near),
+        };
+
+        Self::new(src_node, dst_node, kind, direction, seq)
     }
 
     pub fn src_node(&self) -> NodeId<S> {

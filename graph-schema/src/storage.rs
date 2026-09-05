@@ -685,7 +685,11 @@ pub struct EdgeStorageSlot {
 }
 
 impl EdgeStorageSlot {
-    pub fn get_neighbors(&self, start: Offset, end: Offset) -> impl Iterator<Item = RawNodeId> {
+    pub fn get_neighbors(
+        &self,
+        start: Offset,
+        end: Offset,
+    ) -> impl ExactSizeIterator<Item = RawNodeId> {
         self.neighbors
             .get(start.value()..end.value())
             .unwrap_or(&[])

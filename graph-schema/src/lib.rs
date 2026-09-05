@@ -11,7 +11,6 @@ pub mod strings_pool;
 use std::{fmt::Debug, hash::Hash, str::FromStr};
 
 use crate::{
-    edge::{EdgeHandle, RawEdgeId},
     node::RawNodeId,
     property::{PropertyType, QuantityType},
 };
@@ -21,12 +20,6 @@ pub trait EdgeDirectionKind:
 {
     fn values() -> &'static [Self];
     fn factor(&self) -> usize;
-    fn make_edge(
-        src_node_ref: RawNodeId,
-        dst_node_ref: RawNodeId,
-        direction: Self,
-        edge_handle: EdgeHandle,
-    ) -> RawEdgeId;
     fn src_half() -> Self;
     fn dst_half() -> Self;
     fn orient_edge(&self, src: RawNodeId, dst: RawNodeId) -> (RawNodeId, Self, RawNodeId, Self);
