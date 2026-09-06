@@ -44,6 +44,9 @@ pub trait ItemKindPropertyType {
 
     fn property_type(&self) -> PropertyType;
     fn property_quantity(&self) -> QuantityType;
+    fn enum_property_index(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub trait ItemAll: Sized {

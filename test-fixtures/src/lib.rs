@@ -15,10 +15,19 @@ pub enum Status {
     Banned,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumProperty)]
+pub enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
 #[derive(Debug, Clone, Copy, EnumPropertyRegistry)]
 pub enum TestPropEnumsRegistry {
     #[enum_type(Status)]
     Status,
+    #[enum_type(Color)]
+    Color,
 }
 
 #[derive(Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Debug, PropertyItemKind)]

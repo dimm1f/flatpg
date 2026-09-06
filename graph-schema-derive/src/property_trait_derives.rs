@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Error, Ident, ItemEnum, Variant};
 
-use crate::common::{method_ident, typ_last_segment_name};
+use crate::common::{enum_typ_inner_type, method_ident, typ_last_segment_name};
 use crate::enum_derives::{
     PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
 };
@@ -131,28 +131,7 @@ pub(crate) fn property_binding(
             prop_type_path: quote!(::flatpg::property::PropertyType::String),
         },
         TYP_ENUM => {
-            let last_seg = typ
-                .path
-                .segments
-                .last()
-                .ok_or_else(|| Error::new_spanned(typ, "expected a non-empty `typ` path"))?;
-            let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments else {
-                return Err(Error::new_spanned(
-                    typ,
-                    "`Enum` typ requires a single generic argument naming the registered enum \
-                     type, e.g. `Enum<Status>`",
-                ));
-            };
-            let mut inner_types = args.args.iter().filter_map(|a| match a {
-                syn::GenericArgument::Type(t) => Some(t),
-                _ => None,
-            });
-            let (Some(inner_ty), None) = (inner_types.next(), inner_types.next()) else {
-                return Err(Error::new_spanned(
-                    typ,
-                    "`Enum` typ requires exactly one type argument, e.g. `Enum<Status>`",
-                ));
-            };
+            let inner_ty = enum_typ_inner_type(typ)?;
             let enum_name = quote!(#inner_ty).to_string();
             PropertyBinding {
                 elem_ty: quote!(#inner_ty),

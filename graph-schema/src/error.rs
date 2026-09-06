@@ -84,6 +84,18 @@ pub enum Error {
     },
     #[error("failed to resolve enum kind {0}")]
     UnresolvedEnumKind(usize),
+    #[error("node count {0} exceeds the maximum addressable by a u32")]
+    NodeCountOverflow(usize),
+    #[error(
+        "edge property mismatch for {edge_kind} edge {src} -> {dst}: the half in {src}'s Out \
+         {edge_kind} list and the half in {dst}'s In {edge_kind} list carry different property \
+         values"
+    )]
+    EdgeHalfPropertyMismatch {
+        edge_kind: String,
+        src: String,
+        dst: String,
+    },
 }
 
 impl Error {
@@ -159,6 +171,22 @@ impl Error {
             direction: direction.into(),
             edge_kind: edge_kind.into(),
         }
+    }
+
+    pub fn edge_half_property_mismatch(
+        edge_kind: impl Into<String>,
+        src: impl Into<String>,
+        dst: impl Into<String>,
+    ) -> Self {
+        Self::EdgeHalfPropertyMismatch {
+            edge_kind: edge_kind.into(),
+            src: src.into(),
+            dst: dst.into(),
+        }
+    }
+
+    pub fn node_count_overflow(count: usize) -> Self {
+        Self::NodeCountOverflow(count)
     }
 
     pub fn unresolved_string_id(string_id: impl Into<String>) -> Self {

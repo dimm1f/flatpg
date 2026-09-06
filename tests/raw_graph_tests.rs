@@ -1,5 +1,6 @@
 use flatpg::{
     edge::Direction,
+    enum_property::RawEnumId,
     error::Error,
     graph::{Graph, builder::GraphDiff, raw::RawGraph},
     node::RawNodeId,
@@ -338,6 +339,93 @@ fn foreign_string_id_is_rejected() {
 }
 
 #[test]
+fn node_enum_property_from_another_registered_enum_is_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    setup.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::State, Status::Active)
+            .unwrap()
+            .build(),
+    );
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let state_slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::State).index();
+    raw.property_storage[state_slot_index]
+        .values_mut()
+        .try_as_enum_mut()
+        .unwrap()[0] = RawEnumId::new(Color::enum_property_index(), Color::Blue.index());
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    let Error::EnumPropIndexMismatch { expected, found } = err else {
+        panic!("expected EnumPropIndexMismatch, got {err:?}");
+    };
+    assert_eq!(expected, "Status");
+    assert_eq!(found, Color::enum_property_index());
+}
+
+#[test]
+fn edge_enum_property_from_another_registered_enum_is_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+    setup.add_edge(
+        alpha_id,
+        beta_id,
+        TestEdge::Tagged,
+        Some(PropertyValue::from(Status::Active)),
+    );
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let out_tagged_index =
+        TestSchema::edge_storage_slot(TestNode::Alpha, Direction::Out, TestEdge::Tagged).index();
+    raw.edge_storage[out_tagged_index]
+        .values_mut()
+        .try_as_enum_mut()
+        .unwrap()[0] = RawEnumId::new(Color::enum_property_index(), Color::Red.index());
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    assert!(matches!(err, Error::EnumPropIndexMismatch { .. }));
+}
+
+#[test]
+fn node_enum_property_with_out_of_range_variant_is_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    setup.add_node(
+        builders::AlphaNodeBuilder::new()
+            .add_property(TestProperty::State, Status::Active)
+            .unwrap()
+            .build(),
+    );
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let state_slot_index =
+        TestSchema::property_storage_slot(TestNode::Alpha, TestProperty::State).index();
+    raw.property_storage[state_slot_index]
+        .values_mut()
+        .try_as_enum_mut()
+        .unwrap()[0] = RawEnumId::new(Status::enum_property_index(), 99);
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    assert!(matches!(err, Error::UnresolvedEnumVariant { .. }));
+}
+
+#[test]
 fn unpaired_half_edge_is_rejected() {
     let mut setup = GraphDiff::<TestSchema>::default();
     let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
@@ -405,6 +493,118 @@ fn parallel_edge_degree_mismatch_is_rejected() {
     assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
 }
 
+#[test]
+fn edge_halves_with_divergent_string_values_are_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+    setup.add_edge(
+        alpha_id,
+        beta_id,
+        TestEdge::Labeled,
+        Some(PropertyValue::String("p0".to_string())),
+    );
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let foreign = raw.strings.intern("p1");
+    let beta_in_labeled_index =
+        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Labeled).index();
+    raw.edge_storage[beta_in_labeled_index]
+        .values_mut()
+        .try_as_string_mut()
+        .unwrap()[0] = foreign;
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    let Error::EdgeHalfPropertyMismatch {
+        edge_kind,
+        src,
+        dst,
+        ..
+    } = &err
+    else {
+        panic!("expected EdgeHalfPropertyMismatch, got {err:?}");
+    };
+    assert_eq!(edge_kind, "Labeled");
+    assert_eq!(src, "Alpha(0)");
+    assert_eq!(dst, "Beta(0)");
+    let message = err.to_string();
+    assert!(
+        message.contains("Alpha(0)'s Out Labeled list")
+            && message.contains("Beta(0)'s In Labeled list"),
+        "message should name both halves' lists, got: {message}"
+    );
+}
+
+#[test]
+fn edge_halves_with_divergent_enum_values_are_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+    setup.add_edge(
+        alpha_id,
+        beta_id,
+        TestEdge::Tagged,
+        Some(PropertyValue::from(Status::Active)),
+    );
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let beta_in_tagged_index =
+        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Tagged).index();
+    raw.edge_storage[beta_in_tagged_index]
+        .values_mut()
+        .try_as_enum_mut()
+        .unwrap()[0] = RawEnumId::new(Status::enum_property_index(), Status::Banned.index());
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    assert!(matches!(err, Error::EdgeHalfPropertyMismatch { .. }));
+}
+
+#[test]
+fn parallel_edge_halves_with_swapped_values_are_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+    for value in ["p0", "p1"] {
+        setup.add_edge(
+            alpha_id,
+            beta_id,
+            TestEdge::Labeled,
+            Some(PropertyValue::String(value.to_string())),
+        );
+    }
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let beta_in_labeled_index =
+        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Labeled).index();
+    let values = raw.edge_storage[beta_in_labeled_index]
+        .values_mut()
+        .try_as_string_mut()
+        .unwrap();
+    // Both halves still exist and still point at Alpha; only the pairing of value to edge moved.
+    values[1] = values[0];
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    assert!(matches!(err, Error::EdgeHalfPropertyMismatch { .. }));
+}
+
 // `check_integrity` only takes the rayon-backed path above its size threshold, so every other
 // test in this file exercises the sequential driver regardless of whether the feature is on.
 // These build a graph big enough to cross that threshold.
@@ -435,6 +635,25 @@ fn repoint_one_in_half_edge(raw: &mut RawGraph<TestSchema>) {
         assert!(count > 1, "need a second node of the kind to repoint onto");
         raw.edge_storage[slot_index].neighbors_mut()[0] =
             RawNodeId::new(old.kind(), (old.seq() + 1) % count);
+        return;
+    }
+    panic!("no populated In/Labeled slot to corrupt");
+}
+
+#[cfg(feature = "parallel")]
+fn diverge_one_in_half_edge_value(raw: &mut RawGraph<TestSchema>) {
+    let foreign = raw.strings.intern("a value no half-edge was built with");
+    for &node_kind in TestSchema::node_kinds() {
+        let slot_index =
+            TestSchema::edge_storage_slot(node_kind, Direction::In, TestEdge::Labeled).index();
+        let values = raw.edge_storage[slot_index].values_mut();
+        let Ok(strings) = values.try_as_string_mut() else {
+            continue;
+        };
+        if strings.is_empty() {
+            continue;
+        }
+        strings[0] = foreign;
         return;
     }
     panic!("no populated In/Labeled slot to corrupt");
@@ -475,6 +694,23 @@ fn pairing_defect_is_rejected_on_both_sides_of_the_parallel_threshold() {
         assert!(
             matches!(err, Error::ReverseEdgeNotFound { .. }),
             "expected a pairing error for {node_count} nodes, got {err:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "parallel")]
+fn value_divergence_is_rejected_on_both_sides_of_the_parallel_threshold() {
+    for node_count in [BELOW_THRESHOLD_NODES, ABOVE_THRESHOLD_NODES] {
+        let mut raw: RawGraph<TestSchema> = build_graph(node_count).into();
+        diverge_one_in_half_edge_value(&mut raw);
+
+        let err = Graph::<TestSchema>::try_from(raw)
+            .err()
+            .expect("expected an error");
+        assert!(
+            matches!(err, Error::EdgeHalfPropertyMismatch { .. }),
+            "expected a value mismatch for {node_count} nodes, got {err:?}"
         );
     }
 }

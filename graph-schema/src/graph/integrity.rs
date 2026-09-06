@@ -4,17 +4,22 @@
 //! [`crate::graph::builder::GraphDiff::apply`] keeps this true step by step as it builds the
 //! graph. This check verifies the same rules directly on the final data: offset arrays are
 //! well-formed, storage slot types match the schema, node/string/enum references point to real
-//! data, and every edge has a matching reverse edge. `TryFrom<RawGraph<S>> for Graph<S>` runs
-//! this check before returning a valid [`Graph<S>`](crate::graph::Graph).
+//! data, and every edge has a matching reverse edge carrying the same property value.
+//! `TryFrom<RawGraph<S>> for Graph<S>` runs this check before returning a valid
+//! [`Graph<S>`](crate::graph::Graph).
 //!
-//! Known limitations:
-//! - Enum id checks only confirm that a [`RawEnumId`] points to *some* registered enum
-//!   with a valid variant. They do not confirm it is the *specific* enum that a property or
-//!   edge slot's schema expects. That would need a schema API this crate does not have yet: a
-//!   way to ask "which registry index does this Enum-typed kind expect?"
-//! - Edge pairing checks only confirm that both directions have the same number of edges
-//!   (degree symmetry). They do not check that the edges' property values match, since
-//!   `StoredProperty` does not implement `PartialEq`/`Eq`.
+//! How values compare when pairing half-edges:
+//! - Two halves pair only when they agree on their property value as well as their endpoints.
+//!   Values compare through a canonical encoding, so floats compare **bitwise**: `-0.0` and
+//!   `0.0` are different values, and a NaN pairs only with an identical bit pattern.
+//! - Strings compare by interned id, which is exact because a graph has exactly one
+//!   [`StringsPool`] and interning deduplicates.
+//! - Edge kinds typed [`PropertyType::None`] carry no per-edge value, so for them pairing is
+//!   endpoint-and-degree symmetry as before.
+//!
+//! Known limitation: string ids are only bounds-checked, because [`StringsPool::get`] cannot
+//! tell a foreign handle from its own. A [`RawStringId`] from another pool that happens to be
+//! in range is accepted, and resolves to whatever text sits at that index.
 
 use std::{cmp::Ordering, fmt::Display};
 
@@ -26,24 +31,85 @@ use crate::{
     node::RawNodeId,
     property::PropertyType,
     schema::Schema,
-    storage::{EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, PropertyStorage, StorageArray},
+    storage::{
+        EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, PropertyStorage, StorageArray,
+        ValueKey,
+    },
     strings_pool::{RawStringId, StringsPool},
 };
 
-/// A half-edge canonicalized as a `(source, destination)` pair, so that the two halves of
-/// one edge produce the same value whichever endpoint they are stored on.
-///
-/// The edge kind is not part of the value: halves are bucketed by `edge_kind.index()` and
-/// compared only within one bucket, so edges of different kinds between the same pair of nodes
-/// never pair up with each other. Node kind needs no bucketing, since [`RawNodeId`] already
-/// carries it alongside the sequence number.
-type HalfEdge = (RawNodeId, RawNodeId);
+/// A node's position in a single sequence covering every node of every kind, as a `u32`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+struct DenseNodeId(u32);
+
+/// Maps between [`RawNodeId`] and [`DenseNodeId`] with one prefix-sum table per graph, and
+/// names the node kind a densified id belongs to.
+#[derive(Debug)]
+struct NodeIndex {
+    kind_offsets: Vec<u32>,
+    kind_labels: Vec<&'static str>,
+}
+
+impl NodeIndex {
+    fn new(kinds: impl ExactSizeIterator<Item = (&'static str, usize)>) -> Result<Self, Error> {
+        let mut kind_offsets = Vec::with_capacity(kinds.len() + 1);
+        let mut kind_labels = Vec::with_capacity(kinds.len());
+        let mut total: usize = 0;
+        for (label, count) in kinds {
+            kind_offsets.push(u32::try_from(total).map_err(|_| Error::node_count_overflow(total))?);
+            kind_labels.push(label);
+            total = total.saturating_add(count);
+        }
+        kind_offsets.push(u32::try_from(total).map_err(|_| Error::node_count_overflow(total))?);
+        Ok(Self {
+            kind_offsets,
+            kind_labels,
+        })
+    }
+
+    fn label(&self, dense: DenseNodeId) -> String {
+        let node = self.resolve(dense);
+        match self.kind_labels.get(node.kind()) {
+            Some(kind) => format!("{kind}({})", node.seq()),
+            None => node.to_string(),
+        }
+    }
+
+    fn densify(&self, node: RawNodeId) -> DenseNodeId {
+        let base = self
+            .kind_offsets
+            .get(node.kind())
+            .copied()
+            .unwrap_or(u32::MAX);
+        DenseNodeId(base.saturating_add(node.seq().try_into().unwrap_or(u32::MAX)))
+    }
+
+    fn resolve(&self, dense: DenseNodeId) -> RawNodeId {
+        let kind = self
+            .kind_offsets
+            .iter()
+            .rposition(|&start| start <= dense.0)
+            .unwrap_or(0)
+            .min(self.kind_offsets.len().saturating_sub(2));
+        RawNodeId::new(kind, (dense.0 - self.kind_offsets[kind]) as usize)
+    }
+}
+
+/// A half-edge canonicalized as a `(source, destination)` pair plus its property value, so that
+/// the two halves of one edge produce the same value whichever endpoint they are stored on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct HalfEdge {
+    src: DenseNodeId,
+    dst: DenseNodeId,
+    value: ValueKey,
+}
 
 struct Storages<'a, S: Schema> {
     node_meta: &'a NodeMetaStorage<S>,
     edges: &'a EdgeStorage<S>,
     properties: &'a PropertyStorage<S>,
     strings: &'a StringsPool,
+    nodes: NodeIndex,
 }
 
 /// Verifies a graph's flat storage is well-formed. See the module docs for known limitations.
@@ -68,6 +134,11 @@ pub(crate) fn check_integrity<S: Schema>(
         edges: edge_storage,
         properties: property_storage,
         strings,
+        nodes: NodeIndex::new(
+            S::node_kinds()
+                .iter()
+                .map(|kind| (kind.as_str(), node_meta_storage[kind.index()].len())),
+        )?,
     };
 
     #[cfg(feature = "parallel")]
@@ -97,7 +168,10 @@ fn check_slots<S: Schema>(storages: &Storages<'_, S>) -> Result<(), Error> {
 
     for &edge_kind in S::edge_kinds() {
         check_half_edge_pairing(
-            edge_kind,
+            PairingReport {
+                edge_kind,
+                nodes: &storages.nodes,
+            },
             &mut out_halves[edge_kind.index()],
             &mut in_halves[edge_kind.index()],
         )?;
@@ -123,7 +197,12 @@ fn check_property_slot<S: Schema>(
         check_offsets_bounds(slot_index, slot.offsets(), slot.values().len())?;
     }
 
-    check_values_content::<S>(slot.values(), storages.node_meta, storages.strings)
+    check_values_content::<S>(
+        slot.values(),
+        storages.node_meta,
+        storages.strings,
+        S::node_property_enum_index(property_kind),
+    )
 }
 
 /// Checks one edge storage slot, appending its half-edges to `halves` in canonical
@@ -151,16 +230,29 @@ fn check_edge_slot<S: Schema>(
     if expected_prop_type != PropertyType::None {
         check_offsets_bounds(slot_index, slot.offsets(), slot.values().len())?;
     }
-    check_values_content::<S>(slot.values(), storages.node_meta, storages.strings)?;
+    check_values_content::<S>(
+        slot.values(),
+        storages.node_meta,
+        storages.strings,
+        S::edge_property_enum_index(edge_kind),
+    )?;
 
+    debug_assert_eq!(slot.values().typ(), expected_prop_type);
+
+    let values = slot.values();
     halves.reserve(slot.neighbors().len());
     for (seq, window) in slot.offsets().windows(2).enumerate() {
         let node = RawNodeId::new(node_kind.index(), seq);
-        for neighbor in slot.get_neighbors(window[0], window[1]) {
-            halves.push(match direction {
+        let start = window[0].value();
+        let node = storages.nodes.densify(node);
+        for (offset, neighbor) in slot.get_neighbors(window[0], window[1]).enumerate() {
+            let value = ValueKey::of(values, start + offset);
+            let neighbor = storages.nodes.densify(neighbor);
+            let (src, dst) = match direction {
                 Direction::Out => (node, neighbor),
                 Direction::In => (neighbor, node),
-            });
+            };
+            halves.push(HalfEdge { src, dst, value });
         }
     }
 
@@ -232,9 +324,9 @@ fn check_offsets_shape(
 }
 
 /// Checks that the last value in an offsets array equals the length of its paired
-/// values/neighbors array. The caller skips this check for edge `properties` slots typed
-/// [`PropertyType::None`], because those slots are not resized together with `neighbors`
-/// (see module docs).
+/// values/neighbors array. The caller skips this check for slots typed
+/// [`PropertyType::None`], whose [`StorageArray::None`] is a single marker rather than an
+/// array resized alongside `neighbors`.
 fn check_offsets_bounds(
     slot: impl Display,
     offsets: &[Offset],
@@ -274,6 +366,7 @@ fn check_values_content<S: Schema>(
     storage: &StorageArray,
     node_meta_storage: &NodeMetaStorage<S>,
     strings: &StringsPool,
+    expected_enum: Option<usize>,
 ) -> Result<(), Error> {
     match storage {
         StorageArray::NodeId(items) => {
@@ -288,7 +381,7 @@ fn check_values_content<S: Schema>(
         }
         StorageArray::Enum(items) => {
             for &enum_id in items {
-                check_enum_id::<S::EPR>(enum_id)?;
+                check_enum_id::<S::EPR>(enum_id, expected_enum)?;
             }
         }
         _ => {}
@@ -319,9 +412,24 @@ fn check_string_id(string_id: RawStringId, strings: &StringsPool) -> Result<(), 
     Ok(())
 }
 
-fn check_enum_id<EPR: EnumPropertyRegistry>(enum_id: RawEnumId) -> Result<(), Error> {
+/// Checks one enum value: that its enum resolves in the registry, that it is the enum the slot
+/// declares, and that its variant is in range for that enum.
+fn check_enum_id<EPR: EnumPropertyRegistry>(
+    enum_id: RawEnumId,
+    expected: Option<usize>,
+) -> Result<(), Error> {
     let registry_kind = EPR::from_index(enum_id.enum_property_index())
         .ok_or_else(|| Error::unresolved_enum_kind(enum_id.enum_property_index()))?;
+    if let Some(expected) = expected {
+        if expected != enum_id.enum_property_index() {
+            let expected_kind =
+                EPR::from_index(expected).ok_or_else(|| Error::unresolved_enum_kind(expected))?;
+            return Err(Error::enum_property_index_mismatch(
+                expected_kind.as_str(),
+                enum_id.enum_property_index(),
+            ));
+        }
+    }
     if enum_id.variant() >= registry_kind.variant_count() {
         return Err(Error::unresolved_enum_variant(
             registry_kind.as_str(),
@@ -331,9 +439,10 @@ fn check_enum_id<EPR: EnumPropertyRegistry>(enum_id: RawEnumId) -> Result<(), Er
     Ok(())
 }
 
-/// Confirms every half-edge of one edge kind has a matching reverse half, with the same count.
+/// Confirms every half-edge of one edge kind has a matching reverse half, with the same count
+/// and the same property value.
 ///
-/// Both halves of an edge canonicalize to the same `(source, destination)` pair, so the two
+/// Both halves of an edge canonicalize to the same `(source, destination, value)`, so the two
 /// sides pair up exactly when `out_halves` and `in_halves` hold equal multisets. Sorting
 /// makes that comparison a linear scan and pins the reported error to the lowest-ordered
 /// unpaired half. Both slices are left sorted.
@@ -343,30 +452,48 @@ fn check_enum_id<EPR: EnumPropertyRegistry>(enum_id: RawEnumId) -> Result<(), Er
 /// single `In` edge back from B to A does have a matching reverse edge — just not enough
 /// of them.
 fn check_half_edge_pairing<E: ItemAsStr>(
-    edge_kind: E,
+    report: PairingReport<'_, E>,
     out_halves: &mut [HalfEdge],
     in_halves: &mut [HalfEdge],
 ) -> Result<(), Error> {
     out_halves.sort_unstable();
     in_halves.sort_unstable();
-    report_pairing_mismatch(edge_kind, out_halves, in_halves)
+    report_pairing_mismatch(report, out_halves, in_halves)
 }
 
-/// Reports the lowest-ordered half-edge that has no reverse, given both sides already sorted.
-///
-/// Split out from [`check_half_edge_pairing`] so the sequential and `parallel` paths differ
-/// only in how they sort.
-fn report_pairing_mismatch<E: ItemAsStr>(
+struct PairingReport<'a, E> {
     edge_kind: E,
+    nodes: &'a NodeIndex,
+}
+
+/// Reports the lowest-ordered half-edge that has no matching reverse, given both sides already
+/// sorted.
+fn report_pairing_mismatch<E: ItemAsStr>(
+    report: PairingReport<'_, E>,
     out_halves: &[HalfEdge],
     in_halves: &[HalfEdge],
 ) -> Result<(), Error> {
+    let PairingReport { edge_kind, nodes } = report;
+
     let mismatch = out_halves
         .iter()
         .zip(in_halves.iter())
         .position(|(out_half, in_half)| out_half != in_half);
 
-    let ((src, dst), direction) = match mismatch {
+    // Same edge on both sides, disagreeing only about its value: the reverse half is present,
+    // so reporting it as missing would send a reader looking for the wrong defect.
+    if let Some(i) = mismatch {
+        let (out_half, in_half) = (out_halves[i], in_halves[i]);
+        if out_half.src == in_half.src && out_half.dst == in_half.dst {
+            return Err(Error::edge_half_property_mismatch(
+                edge_kind.as_str(),
+                nodes.label(out_half.src),
+                nodes.label(out_half.dst),
+            ));
+        }
+    }
+
+    let (half, direction) = match mismatch {
         Some(i) if out_halves[i] < in_halves[i] => (out_halves[i], Direction::Out),
         Some(i) => (in_halves[i], Direction::In),
         None => match out_halves.len().cmp(&in_halves.len()) {
@@ -377,12 +504,12 @@ fn report_pairing_mismatch<E: ItemAsStr>(
     };
 
     let (node, target) = match direction {
-        Direction::Out => (src, dst),
-        Direction::In => (dst, src),
+        Direction::Out => (half.src, half.dst),
+        Direction::In => (half.dst, half.src),
     };
     Err(Error::reverse_edge_not_found(
-        target.to_string(),
-        node.to_string(),
+        nodes.label(target),
+        nodes.label(node),
         direction.as_str(),
         edge_kind.as_str(),
     ))
@@ -401,7 +528,7 @@ mod parallel {
     use crate::EdgeDirectionKind;
 
     use super::{
-        Direction, Error, HalfEdge, ItemIndex, Schema, Storages, check_edge_slot,
+        Direction, Error, HalfEdge, ItemIndex, PairingReport, Schema, Storages, check_edge_slot,
         check_property_slot, report_pairing_mismatch,
     };
 
@@ -468,7 +595,14 @@ mod parallel {
             .zip(S::edge_kinds().par_iter())
             .map(|((out, incoming), &edge_kind)| {
                 rayon::join(|| out.par_sort_unstable(), || incoming.par_sort_unstable());
-                report_pairing_mismatch(edge_kind, out, incoming)
+                report_pairing_mismatch(
+                    PairingReport {
+                        edge_kind,
+                        nodes: &storages.nodes,
+                    },
+                    out,
+                    incoming,
+                )
             })
             .reduce(|| Ok(()), |a, b| a.and(b))
     }
@@ -479,7 +613,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use crate::{ItemAll, ItemFromIndex, ItemFromStr};
+    use crate::{ItemAll, ItemFromIndex, ItemFromStr, storage::StoredProperty};
 
     #[test]
     fn offsets_shape_accepts_valid() {
@@ -557,38 +691,52 @@ mod tests {
         assert!(matches!(err, Error::UnresolvedStringId(_)));
     }
 
+    /// A two-enum registry, so a `RawEnumId` can name a *registered* enum other than the one a
+    /// slot declares — the case that separates `EnumPropIndexMismatch` from
+    /// `UnresolvedEnumKind`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     enum TestRegistry {
         Status,
+        Color,
     }
 
     impl ItemAsStr for TestRegistry {
         fn as_str(&self) -> &'static str {
-            "Status"
+            match self {
+                Self::Status => "Status",
+                Self::Color => "Color",
+            }
         }
     }
     impl ItemIndex for TestRegistry {
         fn index(&self) -> usize {
-            0
+            match self {
+                Self::Status => 0,
+                Self::Color => 1,
+            }
         }
     }
     impl ItemFromIndex for TestRegistry {
         fn from_index(index: usize) -> Option<Self> {
-            (index == 0).then_some(Self::Status)
+            match index {
+                0 => Some(Self::Status),
+                1 => Some(Self::Color),
+                _ => None,
+            }
         }
     }
     impl ItemAll for TestRegistry {
         fn all() -> &'static [Self] {
-            &[Self::Status]
+            &[Self::Status, Self::Color]
         }
     }
     impl FromStr for TestRegistry {
         type Err = Error;
         fn from_str(s: &str) -> Result<Self, Self::Err> {
-            if s == "Status" {
-                Ok(Self::Status)
-            } else {
-                Err(Error::unknown_label("TestRegistry", s))
+            match s {
+                "Status" => Ok(Self::Status),
+                "Color" => Ok(Self::Color),
+                _ => Err(Error::unknown_label("TestRegistry", s)),
             }
         }
     }
@@ -596,10 +744,8 @@ mod tests {
     impl EnumPropertyRegistry for TestRegistry {
         fn variant_count(&self) -> usize {
             match self {
-                // Hardcoded: check_enum_id only needs EnumPropertyRegistry, not a full Schema,
-                // so there's no second "domain enum" type to delegate to here (unlike what
-                // #[derive(EnumPropertyRegistry)] generates in production).
                 Self::Status => 2,
+                Self::Color => 3,
             }
         }
     }
@@ -607,44 +753,177 @@ mod tests {
     #[test]
     fn enum_id_within_variant_range_is_accepted() {
         let valid = RawEnumId::new(0, 1);
-        assert!(check_enum_id::<TestRegistry>(valid).is_ok());
+        assert!(check_enum_id::<TestRegistry>(valid, None).is_ok());
     }
 
     #[test]
     fn enum_id_variant_out_of_range_is_rejected() {
         let out_of_range = RawEnumId::new(0, 2);
-        let err = check_enum_id::<TestRegistry>(out_of_range).unwrap_err();
+        let err = check_enum_id::<TestRegistry>(out_of_range, None).unwrap_err();
         assert!(matches!(err, Error::UnresolvedEnumVariant { .. }));
     }
 
     #[test]
     fn enum_id_unregistered_index_is_rejected() {
-        let unregistered = RawEnumId::new(1, 0);
-        let err = check_enum_id::<TestRegistry>(unregistered).unwrap_err();
+        let unregistered = RawEnumId::new(2, 0);
+        let err = check_enum_id::<TestRegistry>(unregistered, None).unwrap_err();
         assert!(matches!(err, Error::UnresolvedEnumKind(_)));
+    }
+
+    #[test]
+    fn enum_id_matching_the_expected_enum_is_accepted() {
+        let valid = RawEnumId::new(1, 2);
+        assert!(check_enum_id::<TestRegistry>(valid, Some(1)).is_ok());
+    }
+
+    #[test]
+    fn enum_id_from_another_registered_enum_is_rejected() {
+        let foreign = RawEnumId::new(1, 0);
+        let err = check_enum_id::<TestRegistry>(foreign, Some(0)).unwrap_err();
+        let Error::EnumPropIndexMismatch { expected, found } = err else {
+            panic!("expected EnumPropIndexMismatch, got {err:?}");
+        };
+        assert_eq!(expected, "Status");
+        assert_eq!(found, 1);
+    }
+
+    #[test]
+    fn enum_id_from_another_registered_enum_is_accepted_without_an_expectation() {
+        let foreign = RawEnumId::new(1, 0);
+        assert!(check_enum_id::<TestRegistry>(foreign, None).is_ok());
+    }
+
+    #[test]
+    fn enum_id_from_another_enum_reports_mismatch_before_variant_range() {
+        let foreign_and_out_of_range = RawEnumId::new(1, 2);
+        let err = check_enum_id::<TestRegistry>(foreign_and_out_of_range, Some(0)).unwrap_err();
+        assert!(matches!(err, Error::EnumPropIndexMismatch { .. }));
     }
 
     fn node(seq: usize) -> RawNodeId {
         RawNodeId::new(0, seq)
     }
 
-    /// Locks in that pairing compares multisets, not slice order: the two sides are built by
-    /// walking different storage slots and only agree once sorted.
+    fn one_kind_index() -> NodeIndex {
+        NodeIndex {
+            kind_offsets: vec![0, u32::MAX],
+            kind_labels: vec!["Node"],
+        }
+    }
+
+    fn labeled(seq: usize) -> String {
+        one_kind_index().label(dense(seq))
+    }
+
+    fn dense(seq: usize) -> DenseNodeId {
+        one_kind_index().densify(node(seq))
+    }
+
+    fn half(src: usize, dst: usize) -> HalfEdge {
+        HalfEdge {
+            src: dense(src),
+            dst: dense(dst),
+            value: ValueKey::default(),
+        }
+    }
+
+    fn valued_half(src: usize, dst: usize, value: i32) -> HalfEdge {
+        let mut values = StorageArray::new(PropertyType::Int);
+        values.try_push(&StoredProperty::Int(value)).unwrap();
+        HalfEdge {
+            src: dense(src),
+            dst: dense(dst),
+            value: ValueKey::of(&values, 0),
+        }
+    }
+
+    fn pair(out_halves: &mut [HalfEdge], in_halves: &mut [HalfEdge]) -> Result<(), Error> {
+        check_half_edge_pairing(
+            PairingReport {
+                edge_kind: TestRegistry::Status,
+                nodes: &one_kind_index(),
+            },
+            out_halves,
+            in_halves,
+        )
+    }
+
     #[test]
-    fn half_edge_pairing_accepts_reordered_matching_halves() {
-        let mut out_halves = [(node(0), node(1)), (node(2), node(3))];
-        let mut in_halves = [(node(2), node(3)), (node(0), node(1))];
+    fn dense_node_id_round_trips_and_preserves_order() {
+        let index = NodeIndex {
+            kind_offsets: vec![0, 3, 5, 9],
+            kind_labels: vec!["Alpha", "Beta", "Gamma"],
+        };
+        let ids = [
+            RawNodeId::new(0, 0),
+            RawNodeId::new(0, 2),
+            RawNodeId::new(1, 0),
+            RawNodeId::new(1, 1),
+            RawNodeId::new(2, 0),
+            RawNodeId::new(2, 3),
+        ];
+        for id in ids {
+            assert_eq!(index.resolve(index.densify(id)), id, "round-trip for {id}");
+        }
+        let densified: Vec<_> = ids.iter().map(|&id| index.densify(id)).collect();
         assert!(
-            check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves).is_ok()
+            densified.windows(2).all(|w| w[0] < w[1]),
+            "dense order must match RawNodeId order: {densified:?}"
         );
     }
 
     #[test]
+    fn node_index_is_built_from_per_kind_counts() {
+        let index = NodeIndex::new([("Alpha", 3usize), ("Beta", 2)].into_iter())
+            .expect("counts fit in u32");
+
+        assert_eq!(index.kind_offsets, vec![0, 3, 5]);
+        assert_eq!(index.densify(RawNodeId::new(1, 1)), DenseNodeId(4));
+        assert_eq!(index.resolve(DenseNodeId(4)), RawNodeId::new(1, 1));
+    }
+
+    #[test]
+    fn node_index_labels_a_node_by_kind_name_and_seq() {
+        let index = NodeIndex::new([("Alpha", 3usize), ("Beta", 2)].into_iter())
+            .expect("counts fit in u32");
+
+        assert_eq!(index.label(index.densify(RawNodeId::new(0, 2))), "Alpha(2)");
+        assert_eq!(index.label(index.densify(RawNodeId::new(1, 1))), "Beta(1)");
+    }
+
+    #[test]
+    fn node_index_handles_empty_node_kinds() {
+        let index = NodeIndex::new([("Alpha", 2usize), ("Beta", 0), ("Gamma", 2)].into_iter())
+            .expect("counts fit in u32");
+
+        assert_eq!(index.kind_offsets, vec![0, 2, 2, 4]);
+        let first_of_last_kind = RawNodeId::new(2, 0);
+        assert_eq!(
+            index.resolve(index.densify(first_of_last_kind)),
+            first_of_last_kind
+        );
+        assert_eq!(index.label(index.densify(first_of_last_kind)), "Gamma(0)");
+    }
+
+    #[test]
+    fn node_index_rejects_a_count_beyond_u32() {
+        let err = NodeIndex::new([("Alpha", u32::MAX as usize), ("Beta", 2)].into_iter())
+            .expect_err("expected an overflow error");
+        assert!(matches!(err, Error::NodeCountOverflow(_)));
+    }
+
+    #[test]
+    fn half_edge_pairing_accepts_reordered_matching_halves() {
+        let mut out_halves = [half(0, 1), half(2, 3)];
+        let mut in_halves = [half(2, 3), half(0, 1)];
+        assert!(pair(&mut out_halves, &mut in_halves).is_ok());
+    }
+
+    #[test]
     fn half_edge_pairing_rejects_out_half_without_reverse() {
-        let mut out_halves = [(node(0), node(1)), (node(0), node(2))];
-        let mut in_halves = [(node(0), node(1))];
-        let err = check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves)
-            .expect_err("expected an error");
+        let mut out_halves = [half(0, 1), half(0, 2)];
+        let mut in_halves = [half(0, 1)];
+        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
 
         let Error::ReverseEdgeNotFound {
             target,
@@ -655,17 +934,16 @@ mod tests {
         else {
             panic!("expected ReverseEdgeNotFound, got {err:?}");
         };
-        assert_eq!(target, node(2).to_string());
-        assert_eq!(owner, node(0).to_string());
+        assert_eq!(target, labeled(2));
+        assert_eq!(owner, labeled(0));
         assert_eq!(direction, "Out");
     }
 
     #[test]
     fn half_edge_pairing_rejects_in_half_without_reverse() {
-        let mut out_halves = [(node(0), node(1))];
-        let mut in_halves = [(node(0), node(1)), (node(0), node(2))];
-        let err = check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves)
-            .expect_err("expected an error");
+        let mut out_halves = [half(0, 1)];
+        let mut in_halves = [half(0, 1), half(0, 2)];
+        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
 
         let Error::ReverseEdgeNotFound {
             target,
@@ -676,19 +954,60 @@ mod tests {
         else {
             panic!("expected ReverseEdgeNotFound, got {err:?}");
         };
-        assert_eq!(target, node(0).to_string());
-        assert_eq!(owner, node(2).to_string());
+        assert_eq!(target, labeled(0));
+        assert_eq!(owner, labeled(2));
         assert_eq!(direction, "In");
     }
 
-    /// A plain existence check would accept this: the reverse edge does exist, there is just
-    /// one of it against two forward halves.
     #[test]
     fn half_edge_pairing_rejects_parallel_edge_count_mismatch() {
-        let mut out_halves = [(node(0), node(1)), (node(0), node(1))];
-        let mut in_halves = [(node(0), node(1))];
-        let err = check_half_edge_pairing(TestRegistry::Status, &mut out_halves, &mut in_halves)
-            .expect_err("expected an error");
+        let mut out_halves = [half(0, 1), half(0, 1)];
+        let mut in_halves = [half(0, 1)];
+        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
+        assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
+    }
+
+    #[test]
+    fn half_edge_pairing_rejects_divergent_property_values() {
+        let mut out_halves = [valued_half(0, 1, 7)];
+        let mut in_halves = [valued_half(0, 1, 9)];
+        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
+
+        let Error::EdgeHalfPropertyMismatch { src, dst, .. } = &err else {
+            panic!("expected EdgeHalfPropertyMismatch, got {err:?}");
+        };
+        assert_eq!(*src, labeled(0));
+        assert_eq!(*dst, labeled(1));
+        // The message must name both storage lists, so a reader knows where to look without
+        // being told the values themselves.
+        let message = err.to_string();
+        assert!(
+            message.contains("Node(0)'s Out Status list")
+                && message.contains("Node(1)'s In Status list"),
+            "message should name both halves' lists, got: {message}"
+        );
+    }
+
+    #[test]
+    fn half_edge_pairing_accepts_equal_value_multisets_in_different_order() {
+        let mut out_halves = [valued_half(0, 1, 7), valued_half(0, 1, 9)];
+        let mut in_halves = [valued_half(0, 1, 9), valued_half(0, 1, 7)];
+        assert!(pair(&mut out_halves, &mut in_halves).is_ok());
+    }
+
+    #[test]
+    fn half_edge_pairing_rejects_parallel_edges_with_swapped_values() {
+        let mut out_halves = [valued_half(0, 1, 7), valued_half(0, 1, 7)];
+        let mut in_halves = [valued_half(0, 1, 7), valued_half(0, 1, 9)];
+        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
+        assert!(matches!(err, Error::EdgeHalfPropertyMismatch { .. }));
+    }
+
+    #[test]
+    fn half_edge_pairing_reports_structural_defect_over_value_when_both_differ() {
+        let mut out_halves = [valued_half(0, 1, 7), valued_half(0, 2, 9)];
+        let mut in_halves = [valued_half(0, 1, 7)];
+        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
         assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
     }
 }

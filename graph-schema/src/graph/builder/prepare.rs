@@ -6,7 +6,9 @@ use crate::{
     node::{NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, Schema},
-    storage::{EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, StoredProperty},
+    storage::{
+        EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, StorageArray, StoredProperty, ValueKey,
+    },
 };
 
 use super::convert::to_stored_property;
@@ -295,14 +297,24 @@ fn classify_changes<'a, S: Schema>(
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
 
+                let wanted = half_edge_value_key(
+                    &graph.edge_storage,
+                    primary,
+                    primary_slot_index,
+                    primary_seq,
+                );
+
                 let secondary_seq = find_reverse_edge_seq(
                     &graph.edge_storage,
                     secondary,
                     secondary_slot_index,
                     secondary_dir,
                     edge_kind,
-                    primary,
-                    already_claimed,
+                    ReverseHalfQuery {
+                        target: primary,
+                        excluded: already_claimed,
+                        wanted,
+                    },
                 )?;
 
                 slot_edge_removals.bucket(secondary_slot_index, secondary_count)[secondary.seq()]
@@ -323,22 +335,36 @@ fn find_reverse_edge_seq<S>(
     slot_index: usize,
     direction: Direction,
     edge_kind: EdgeKind<S>,
-    target: RawNodeId,
-    excluded: &[usize],
+    query: ReverseHalfQuery<'_>,
 ) -> Result<usize, Error>
 where
     S: Schema,
 {
+    let ReverseHalfQuery {
+        target,
+        excluded,
+        wanted,
+    } = query;
     let slot = &edge_storage[slot_index];
 
     let Some((start, end)) = slot.get_offset(node.seq()) else {
         return Err(Error::node_offset_not_found(node.seq()));
     };
 
-    slot.get_neighbors(start, end)
-        .enumerate()
-        .find(|(local_seq, neighbor)| *neighbor == target && !excluded.contains(local_seq))
-        .map(|(local_seq, _)| local_seq)
+    let candidates = || {
+        slot.get_neighbors(start, end)
+            .enumerate()
+            .filter(|(local_seq, neighbor)| *neighbor == target && !excluded.contains(local_seq))
+            .map(|(local_seq, _)| local_seq)
+    };
+
+    let matching_value = wanted.and_then(|wanted| {
+        candidates()
+            .find(|&local_seq| ValueKey::of(slot.values(), start.value() + local_seq) == wanted)
+    });
+
+    matching_value
+        .or_else(|| candidates().next())
         .ok_or_else(|| match (node.try_into(), target.try_into()) {
             (Ok::<NodeId<S>, _>(node), Ok::<NodeId<S>, _>(target)) => {
                 Error::reverse_edge_not_found(
@@ -350,6 +376,30 @@ where
             }
             (Err(e), _) | (_, Err(e)) => e,
         })
+}
+
+struct ReverseHalfQuery<'a> {
+    target: RawNodeId,
+    excluded: &'a [usize],
+    wanted: Option<ValueKey>,
+}
+
+fn half_edge_value_key<S>(
+    edge_storage: &EdgeStorage<S>,
+    node: RawNodeId,
+    slot_index: usize,
+    local_seq: usize,
+) -> Option<ValueKey>
+where
+    S: Schema,
+{
+    let slot = &edge_storage[slot_index];
+    if matches!(slot.values(), StorageArray::None) {
+        return None;
+    }
+    let (start, end) = slot.get_offset(node.seq())?;
+    let index = start.value().checked_add(local_seq)?;
+    (index < end.value()).then(|| ValueKey::of(slot.values(), index))
 }
 
 fn edge_to_halves<F, S>(

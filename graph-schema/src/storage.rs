@@ -49,6 +49,59 @@ impl StoredProperty {
     }
 }
 
+/// The bit that flips to turn a two's-complement signed value into an order-preserving unsigned
+/// one, and the top bit of the float transform.
+const SIGN_FLIP_64: u64 = 1 << 63;
+const SIGN_FLIP_32: u32 = 1 << 31;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(crate) struct ValueKey(u64);
+
+impl ValueKey {
+    pub(crate) fn of(values: &StorageArray, index: usize) -> Self {
+        let key = match values {
+            StorageArray::Bool(v) => v.get(index).map(|&b| b as u64),
+            StorageArray::Byte(v) => v.get(index).map(|&b| b as u64),
+            StorageArray::Short(v) => v.get(index).map(|&n| signed_key(n as i64)),
+            StorageArray::Int(v) => v.get(index).map(|&n| signed_key(n as i64)),
+            StorageArray::Long(v) => v.get(index).map(|&n| signed_key(n)),
+            StorageArray::Float(v) => v.get(index).map(|&f| float32_key(f)),
+            StorageArray::Double(v) => v.get(index).map(|&f| float64_key(f)),
+            StorageArray::NodeId(v) => v
+                .get(index)
+                .map(|n| (n.kind() as u64) << 32 | n.seq() as u64),
+            // Sound because a graph has exactly one `StringsPool` and interning deduplicates,
+            // so equal text always carries the same id. Per-shard or merged pools would break
+            // this and would need the text compared instead.
+            StorageArray::StringId(v) => v.get(index).map(|s| s.index() as u64),
+            StorageArray::Enum(v) => v
+                .get(index)
+                .map(|e| (e.enum_property_index() as u64) << 16 | e.variant() as u64),
+            StorageArray::None => None,
+        };
+        Self(key.unwrap_or(0))
+    }
+}
+
+fn signed_key(value: i64) -> u64 {
+    (value as u64) ^ SIGN_FLIP_64
+}
+
+/// Maps IEEE-754 bits onto an order-preserving integer, matching `f64::total_cmp`.
+///
+/// A positive float keeps its bit order and moves above the midpoint; a negative one is
+/// inverted, which both reverses its bit order (more negative means larger raw bits) and moves
+/// it below. The transform must run at the float's own width, so `f32` and `f64` differ.
+fn float64_key(value: f64) -> u64 {
+    let bits = value.to_bits();
+    bits ^ ((((bits as i64) >> 63) as u64) | SIGN_FLIP_64)
+}
+
+fn float32_key(value: f32) -> u64 {
+    let bits = value.to_bits();
+    (bits ^ ((((bits as i32) >> 31) as u32) | SIGN_FLIP_32)) as u64
+}
+
 type InnerOffset = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -882,6 +935,102 @@ mod tests {
             StoredProperty::StringId(strings.intern("x")),
             StoredProperty::Enum(RawEnumId::new(0, 0)),
         ]
+    }
+
+    /// Builds a one-element array of `typ` holding `value`, and returns its key.
+    fn key_of(value: StoredProperty) -> ValueKey {
+        let mut arr = StorageArray::new(value.typ());
+        arr.try_push(&value).unwrap();
+        ValueKey::of(&arr, 0)
+    }
+
+    #[test]
+    fn value_key_orders_signed_integers_by_value() {
+        let keys: Vec<_> = [i32::MIN, -1, 0, 1, i32::MAX]
+            .into_iter()
+            .map(|n| key_of(StoredProperty::Int(n)))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "keys: {keys:?}");
+    }
+
+    #[test]
+    fn value_key_orders_floats_by_total_cmp() {
+        let keys: Vec<_> = [f64::NEG_INFINITY, -1.0, -0.0, 0.0, 1.0, f64::INFINITY]
+            .into_iter()
+            .map(|f| key_of(StoredProperty::Double(f)))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "keys: {keys:?}");
+    }
+
+    /// Pins the bitwise rule: the two zeros are distinguishable, so two half-edges storing
+    /// `0.0` and `-0.0` are reported as disagreeing rather than silently paired.
+    #[test]
+    fn value_key_separates_positive_and_negative_zero() {
+        assert_ne!(
+            key_of(StoredProperty::Double(0.0)),
+            key_of(StoredProperty::Double(-0.0))
+        );
+        assert_ne!(
+            key_of(StoredProperty::Float(0.0)),
+            key_of(StoredProperty::Float(-0.0))
+        );
+    }
+
+    #[test]
+    fn value_key_orders_f32_by_total_cmp() {
+        let keys: Vec<_> = [f32::NEG_INFINITY, -1.0, -0.0, 0.0, 1.0, f32::INFINITY]
+            .into_iter()
+            .map(|f| key_of(StoredProperty::Float(f)))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "keys: {keys:?}");
+    }
+
+    /// Distinct values of one type must key distinctly, or two half-edges that genuinely
+    /// disagree would pair up.
+    #[test]
+    fn value_key_separates_distinct_values_of_each_type() {
+        let mut strings = StringsPool::new();
+        let pairs: Vec<(StoredProperty, StoredProperty)> = vec![
+            (StoredProperty::Bool(true), StoredProperty::Bool(false)),
+            (StoredProperty::Byte(7), StoredProperty::Byte(8)),
+            (StoredProperty::Short(-7), StoredProperty::Short(7)),
+            (StoredProperty::Int(i32::MIN), StoredProperty::Int(i32::MAX)),
+            (
+                StoredProperty::Long(i64::MIN),
+                StoredProperty::Long(i64::MAX),
+            ),
+            (StoredProperty::Float(-1.5), StoredProperty::Float(1.5)),
+            (StoredProperty::Double(2.25), StoredProperty::Double(2.5)),
+            (
+                StoredProperty::NodeId(RawNodeId::new(2, 5)),
+                StoredProperty::NodeId(RawNodeId::new(5, 2)),
+            ),
+            (
+                StoredProperty::StringId(strings.intern("hello")),
+                StoredProperty::StringId(strings.intern("world")),
+            ),
+            (
+                StoredProperty::Enum(RawEnumId::new(1, 2)),
+                StoredProperty::Enum(RawEnumId::new(2, 1)),
+            ),
+        ];
+        for (left, right) in pairs {
+            let typ = left.typ();
+            assert_ne!(key_of(left), key_of(right), "keys collided for {typ}");
+        }
+    }
+
+    /// A `None`-typed slot has no per-item value, and an out-of-range read must not panic.
+    #[test]
+    fn value_key_is_zero_for_none_storage_and_out_of_range_reads() {
+        assert_eq!(
+            ValueKey::of(&StorageArray::new(PropertyType::None), 0),
+            ValueKey::default()
+        );
+        assert_eq!(
+            ValueKey::of(&StorageArray::new(PropertyType::Int), 3),
+            ValueKey::default()
+        );
     }
 
     #[test]

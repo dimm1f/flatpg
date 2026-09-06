@@ -254,7 +254,9 @@ The check runs on one thread by default. The optional `parallel` feature checks 
 flatpg = { version = "0.1", features = ["parallel"] }
 ```
 
-Known limitation: enum property validation confirms a `RawEnumId` belongs to *some* registered enum with an in-range variant, not that it belongs to the *specific* enum a given property or edge slot declares. Half-edge pairing validates that mirrored halves exist in matching numbers, not that their property values agree with each other.
+Enum property validation confirms a `RawEnumId` belongs to the *specific* enum the property or edge slot declares, with an in-range variant. Half-edge pairing requires mirrored halves to exist in matching numbers *and* to agree on their property value; values compare through a canonical encoding, so floats compare bitwise (`-0.0` and `0.0` are different values) and strings compare by interned id.
+
+Known limitation: string ids are only bounds-checked. A `RawStringId` minted by a different graph's pool that happens to be in range is accepted, and resolves to whatever text sits at that index.
 
 ### Identifiers and references
 

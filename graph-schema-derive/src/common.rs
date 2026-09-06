@@ -1,4 +1,7 @@
-use syn::{Attribute, Error, Ident, ItemEnum, TypePath, punctuated::Punctuated};
+use syn::{
+    Attribute, Error, GenericArgument, Ident, ItemEnum, PathArguments, TypePath,
+    punctuated::Punctuated,
+};
 
 use crate::enum_derives::require_attribute;
 
@@ -76,6 +79,32 @@ pub(crate) fn typ_last_segment_name(typ: &TypePath) -> Result<String, Error> {
         .last()
         .map(|s| s.ident.to_string())
         .ok_or_else(|| Error::new_spanned(typ, "expected a non-empty `typ` path"))
+}
+
+pub(crate) fn enum_typ_inner_type(typ: &TypePath) -> Result<&syn::Type, Error> {
+    let last_seg = typ
+        .path
+        .segments
+        .last()
+        .ok_or_else(|| Error::new_spanned(typ, "expected a non-empty `typ` path"))?;
+    let PathArguments::AngleBracketed(args) = &last_seg.arguments else {
+        return Err(Error::new_spanned(
+            typ,
+            "`Enum` typ requires a single generic argument naming the registered enum \
+             type, e.g. `Enum<Status>`",
+        ));
+    };
+    let mut inner_types = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let (Some(inner_ty), None) = (inner_types.next(), inner_types.next()) else {
+        return Err(Error::new_spanned(
+            typ,
+            "`Enum` typ requires exactly one type argument, e.g. `Enum<Status>`",
+        ));
+    };
+    Ok(inner_ty)
 }
 
 #[cfg(test)]

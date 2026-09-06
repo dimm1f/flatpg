@@ -4,10 +4,13 @@ use flatpg::{
     graph::{Graph, builder::GraphDiff},
     node::RawNodeId,
     prelude::*,
+    property::PropertyValue,
 };
 use test_fixtures::*;
 
-use crate::common::{collect_edges, out_edge_dst_seqs, setup_graph_with_fan_out_edges};
+use crate::common::{
+    collect_edges, out_edge_dst_seqs, setup_graph_with_fan_out_edges, string_value,
+};
 
 /// Locks in the other documented gotcha from `GraphDiff::apply`'s doc comment: a stale
 /// `EdgeId` from before an earlier `apply` call's own removal can make `remove_edge`'s
@@ -232,5 +235,74 @@ fn add_edge_remove_then_readd_edge_is_accessible() {
             .get_edges_count(RawNodeId::from(&beta), TestEdge::Plain, Direction::In)
             .unwrap(),
         1
+    );
+}
+
+/// Removing one of two parallel edges must leave the survivor's two halves agreeing on their
+/// property value.
+#[test]
+fn removing_one_of_two_parallel_edges_keeps_both_halves_of_the_survivor_in_agreement() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+    for value in ["p0", "p1"] {
+        setup.add_edge(
+            alpha_id,
+            beta_id,
+            TestEdge::Labeled,
+            Some(PropertyValue::String(value.to_string())),
+        );
+    }
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let alpha = graph.nodes_by_kind(TestNode::Alpha).next().expect("Alpha");
+    let beta = graph.nodes_by_kind(TestNode::Beta).next().expect("Beta");
+
+    let mut out_edges = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out);
+    out_edges.sort_by_key(|e| e.seq());
+    let removed = out_edges.remove(1);
+    assert_eq!(
+        string_value(&graph, graph.get_edge_property(removed).unwrap().unwrap()),
+        "p1"
+    );
+
+    let mut out_edges = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out);
+    out_edges.sort_by_key(|e| e.seq());
+    let mut remove = GraphDiff::<TestSchema>::default();
+    remove.remove_edge(out_edges.remove(1));
+    let (graph, _) = remove.apply(graph).expect("apply removal");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut survivor_out = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out);
+    let mut survivor_in = collect_edges(&graph, beta, TestEdge::Labeled, Direction::In);
+    assert_eq!(survivor_out.len(), 1);
+    assert_eq!(survivor_in.len(), 1);
+
+    let from_out = string_value(
+        &graph,
+        graph
+            .get_edge_property(survivor_out.remove(0))
+            .unwrap()
+            .unwrap(),
+    );
+    let from_in = string_value(
+        &graph,
+        graph
+            .get_edge_property(survivor_in.remove(0))
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(
+        from_out, "p0",
+        "the surviving edge is the one that was not removed"
+    );
+    assert_eq!(
+        from_out, from_in,
+        "both halves of one edge must report the same property"
     );
 }

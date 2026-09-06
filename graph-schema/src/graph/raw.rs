@@ -3,7 +3,7 @@
 //!
 //! Converting a [`RawGraph<S>`] back into a [`Graph<S>`] runs the same checks as
 //! [`CheckIntegrity::check_integrity`] before handing back a checked graph — see
-//! [`crate::graph::integrity`] for what it verifies and its known limitations.
+//! [`crate::graph::integrity`] for what it verifies.
 
 use crate::{
     error::Error,

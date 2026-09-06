@@ -3,7 +3,8 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Attribute, Error, ItemEnum, LitStr, TypePath, Variant, parse2, punctuated::Punctuated};
 
-use crate::common::typ_last_segment_name;
+use crate::common::{enum_typ_inner_type, typ_last_segment_name};
+use crate::property_trait_derives::TYP_ENUM;
 
 pub(crate) const PROPERTY_ATTR: &str = "property";
 const PROPERTY_TYPE_KEY: &str = "typ";
@@ -328,9 +329,24 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
                 .ok_or_else(|| absent_attribute_error(variant, has_qty))?;
             // Only the last path segment's identifier names a `PropertyType` variant — a generic
             // argument like `Enum<Status>`'s `<Status>` is not part of `PropertyType` itself and
-            // must be dropped here (it's unpacked separately by `property_binding`'s `Enum` arm).
+            // is dropped here. It is not lost: `enum_index` below turns it into the registry
+            // index, and `property_binding`'s `Enum` arm unpacks it for the typed accessor.
             let typ_name = typ_last_segment_name(typ)?;
             let typ_ident = format_ident!("{}", typ_name);
+
+            // `Some(..)` exactly when the type is `Enum<T>`, which is the contract
+            // `ItemKindPropertyType::enum_property_index` documents.
+            let enum_index = if typ_name == TYP_ENUM {
+                let inner_ty = enum_typ_inner_type(typ)?;
+                quote! {
+                    #ident::#variant => ::core::option::Option::Some(
+                        <#inner_ty as ::flatpg::prelude::EnumPropertyIndex>::enum_property_index()
+                    )
+                }
+            } else {
+                quote! {#ident::#variant => ::core::option::Option::None}
+            };
+
             let typ = quote! {#ident::#variant => ::flatpg::property::PropertyType::#typ_ident};
 
             let qty = if has_qty {
@@ -343,14 +359,17 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
                 quote! {#ident::#variant => ::flatpg::property::QuantityType::One}
             };
 
-            Ok((typ, qty))
+            Ok((typ, qty, enum_index))
         })
         .collect();
 
-    let (prop_type_variants, prop_qty_variants): (Vec<_>, Vec<_>) = match results {
-        Ok(v) => v.into_iter().unzip(),
+    let results = match results {
+        Ok(v) => v,
         Err(e) => return e.to_compile_error(),
     };
+    let prop_type_variants = results.iter().map(|(typ, _, _)| typ);
+    let prop_qty_variants = results.iter().map(|(_, qty, _)| qty);
+    let enum_index_variants = results.iter().map(|(_, _, index)| index);
 
     quote! {
         #[automatically_derived]
@@ -365,6 +384,11 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
             fn property_quantity(&self) -> Self::QuantityType {
                 match self {
                     #(#prop_qty_variants,)*
+                }
+            }
+            fn enum_property_index(&self) -> ::core::option::Option<usize> {
+                match self {
+                    #(#enum_index_variants,)*
                 }
             }
         }
@@ -919,6 +943,59 @@ mod tests {
     #[test]
     fn property_type_derive_with_qty_missing_quantity_emits_compile_error() {
         let input = parse_enum(r#"enum E { #[property(typ = Int)] A }"#);
+        assert!(has_compile_error(item_kind_property_type_derive(
+            &input, true
+        )));
+    }
+
+    fn enum_index_arm_is_some(impl_block: &syn::ItemImpl, variant: &str) -> Option<bool> {
+        let method = find_method(impl_block, "enum_property_index")?;
+        let Stmt::Expr(Expr::Match(m), _) = &method.block.stmts[0] else {
+            return None;
+        };
+        m.arms.iter().find_map(|arm| {
+            let syn::Pat::Path(p) = &arm.pat else {
+                return None;
+            };
+            if p.path.segments.last()?.ident != variant {
+                return None;
+            }
+            Some(matches!(arm.body.as_ref(), Expr::Call(_)))
+        })
+    }
+
+    #[test]
+    fn property_type_derive_emits_enum_property_index() {
+        let input = parse_enum(
+            r#"enum E {
+                #[property(typ = Enum<Status>, quantity = One)] A,
+                #[property(typ = Int, quantity = One)] B,
+            }"#,
+        );
+        let file = parse_output(item_kind_property_type_derive(&input, true));
+        let impl_block = find_impl(&file, "ItemKindPropertyType", "E").expect("impl not found");
+
+        let method =
+            find_method(impl_block, "enum_property_index").expect("fn enum_property_index");
+        assert_eq!(match_arm_count(method).expect("no match expr"), 2);
+        assert_inherited_vis(method);
+
+        assert_eq!(enum_index_arm_is_some(impl_block, "A"), Some(true));
+        assert_eq!(enum_index_arm_is_some(impl_block, "B"), Some(false));
+    }
+
+    #[test]
+    fn property_type_derive_enum_without_type_argument_emits_compile_error() {
+        let input = parse_enum(r#"enum E { #[property(typ = Enum, quantity = One)] A }"#);
+        assert!(has_compile_error(item_kind_property_type_derive(
+            &input, true
+        )));
+    }
+
+    #[test]
+    fn property_type_derive_enum_with_two_type_arguments_emits_compile_error() {
+        let input =
+            parse_enum(r#"enum E { #[property(typ = Enum<Status, Color>, quantity = One)] A }"#);
         assert!(has_compile_error(item_kind_property_type_derive(
             &input, true
         )));

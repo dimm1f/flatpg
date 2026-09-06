@@ -216,6 +216,18 @@ pub trait Schema: Sized + Clone + Copy + Debug {
         node_property_kind.property_type()
     }
 
+    /// Returns the registry index of the enum that edges of the given kind carry, or `None`
+    /// when the kind is not `Enum`-typed. See [`ItemKindPropertyType::enum_property_index`].
+    fn edge_property_enum_index(edge_kind: Self::E) -> Option<usize> {
+        edge_kind.enum_property_index()
+    }
+
+    /// Returns the registry index of the enum the given node property kind carries, or `None`
+    /// when the kind is not `Enum`-typed. See [`ItemKindPropertyType::enum_property_index`].
+    fn node_property_enum_index(node_property_kind: Self::P) -> Option<usize> {
+        node_property_kind.enum_property_index()
+    }
+
     /// Returns the number of slots in the flat edge storage array.
     ///
     /// Equals `edge_kinds * directions * node_kinds`.
