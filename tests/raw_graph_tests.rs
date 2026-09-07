@@ -7,7 +7,7 @@ use flatpg::{
     prelude::*,
     property::PropertyValue,
     schema::Schema,
-    storage::{Offset, OffsetStorage, StorageArray},
+    storage::{EdgeSeq, Offset, OffsetStorage, StorageArray},
     strings_pool::RawStringId,
 };
 use test_fixtures::*;
@@ -51,7 +51,9 @@ fn shrink_node_count<S: Schema>(raw: &mut RawGraph<S>, kind: S::N) {
         let new_end = *slot.offsets().last().unwrap();
         let range = new_end.value()..removed_end.value();
         slot.neighbors_mut().drain(range.clone());
-        slot.values_mut().try_drain(range).unwrap();
+        if !slot.edges().is_empty() {
+            slot.edges_mut().drain(range);
+        }
     }
 }
 
@@ -387,9 +389,7 @@ fn edge_enum_property_from_another_registered_enum_is_rejected() {
         .expect("graph passes integrity check");
 
     let mut raw: RawGraph<TestSchema> = graph.into();
-    let out_tagged_index =
-        TestSchema::edge_storage_slot(TestNode::Alpha, Direction::Out, TestEdge::Tagged).index();
-    raw.edge_storage[out_tagged_index]
+    raw.edge_property_storage[TestEdge::Tagged.index()]
         .values_mut()
         .try_as_enum_mut()
         .unwrap()[0] = RawEnumId::new(Color::enum_property_index(), Color::Red.index());
@@ -493,116 +493,124 @@ fn parallel_edge_degree_mismatch_is_rejected() {
     assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
 }
 
-#[test]
-fn edge_halves_with_divergent_string_values_are_rejected() {
+/// Builds one Alpha->Beta `Labeled` edge per value, and returns the graph as raw storage.
+fn labeled_edges_raw(values: &[&str]) -> RawGraph<TestSchema> {
     let mut setup = GraphDiff::<TestSchema>::default();
     let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
     let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
-    setup.add_edge(
-        alpha_id,
-        beta_id,
-        TestEdge::Labeled,
-        Some(PropertyValue::String("p0".to_string())),
-    );
-    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
-    graph
-        .check_integrity()
-        .expect("graph passes integrity check");
-
-    let mut raw: RawGraph<TestSchema> = graph.into();
-    let foreign = raw.strings.intern("p1");
-    let beta_in_labeled_index =
-        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Labeled).index();
-    raw.edge_storage[beta_in_labeled_index]
-        .values_mut()
-        .try_as_string_mut()
-        .unwrap()[0] = foreign;
-
-    let err = Graph::<TestSchema>::try_from(raw)
-        .err()
-        .expect("expected an error");
-    let Error::EdgeHalfPropertyMismatch {
-        edge_kind,
-        src,
-        dst,
-        ..
-    } = &err
-    else {
-        panic!("expected EdgeHalfPropertyMismatch, got {err:?}");
-    };
-    assert_eq!(edge_kind, "Labeled");
-    assert_eq!(src, "Alpha(0)");
-    assert_eq!(dst, "Beta(0)");
-    let message = err.to_string();
-    assert!(
-        message.contains("Alpha(0)'s Out Labeled list")
-            && message.contains("Beta(0)'s In Labeled list"),
-        "message should name both halves' lists, got: {message}"
-    );
-}
-
-#[test]
-fn edge_halves_with_divergent_enum_values_are_rejected() {
-    let mut setup = GraphDiff::<TestSchema>::default();
-    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
-    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
-    setup.add_edge(
-        alpha_id,
-        beta_id,
-        TestEdge::Tagged,
-        Some(PropertyValue::from(Status::Active)),
-    );
-    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
-    graph
-        .check_integrity()
-        .expect("graph passes integrity check");
-
-    let mut raw: RawGraph<TestSchema> = graph.into();
-    let beta_in_tagged_index =
-        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Tagged).index();
-    raw.edge_storage[beta_in_tagged_index]
-        .values_mut()
-        .try_as_enum_mut()
-        .unwrap()[0] = RawEnumId::new(Status::enum_property_index(), Status::Banned.index());
-
-    let err = Graph::<TestSchema>::try_from(raw)
-        .err()
-        .expect("expected an error");
-    assert!(matches!(err, Error::EdgeHalfPropertyMismatch { .. }));
-}
-
-#[test]
-fn parallel_edge_halves_with_swapped_values_are_rejected() {
-    let mut setup = GraphDiff::<TestSchema>::default();
-    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
-    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
-    for value in ["p0", "p1"] {
+    for value in values {
         setup.add_edge(
             alpha_id,
             beta_id,
             TestEdge::Labeled,
-            Some(PropertyValue::String(value.to_string())),
+            Some(PropertyValue::String((*value).to_string())),
         );
     }
     let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
     graph
         .check_integrity()
         .expect("graph passes integrity check");
+    graph.into()
+}
 
-    let mut raw: RawGraph<TestSchema> = graph.into();
-    let beta_in_labeled_index =
-        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Labeled).index();
-    let values = raw.edge_storage[beta_in_labeled_index]
-        .values_mut()
-        .try_as_string_mut()
-        .unwrap();
-    // Both halves still exist and still point at Alpha; only the pairing of value to edge moved.
-    values[1] = values[0];
+fn beta_in_labeled_slot() -> usize {
+    TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Labeled).index()
+}
+
+/// Both halves of an edge index one stored value, so the value cannot be corrupted on one side
+/// alone. What replaces that defect is a half-edge naming a value that isn't there.
+#[test]
+fn half_edge_naming_a_seq_past_the_store_is_rejected() {
+    let mut raw = labeled_edges_raw(&["p0"]);
+    let count = raw.edge_property_storage[TestEdge::Labeled.index()].count();
+    raw.edge_storage[beta_in_labeled_slot()].edges_mut()[0] =
+        EdgeSeq::new(count).expect("seq fits in u32");
 
     let err = Graph::<TestSchema>::try_from(raw)
         .err()
         .expect("expected an error");
-    assert!(matches!(err, Error::EdgeHalfPropertyMismatch { .. }));
+    let Error::EdgeSeqOutOfBounds {
+        edge_kind,
+        edge_seq,
+        ..
+    } = &err
+    else {
+        panic!("expected EdgeSeqOutOfBounds, got {err:?}");
+    };
+    assert_eq!(edge_kind, "Labeled");
+    assert_eq!(*edge_seq, count);
+}
+
+/// Two halves of one direction claiming the same edge leaves every seq paired, so it needs its
+/// own rejection: it is the shape a duplicated value used to take.
+#[test]
+fn two_half_edges_claiming_one_seq_in_a_direction_are_rejected() {
+    let mut raw = labeled_edges_raw(&["p0", "p1"]);
+    let edges = raw.edge_storage[beta_in_labeled_slot()].edges_mut();
+    // Both halves still exist and still point at Alpha; only which edge they name changed.
+    edges[1] = edges[0];
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    let Error::DuplicateHalfEdge {
+        edge_kind,
+        direction,
+        ..
+    } = &err
+    else {
+        panic!("expected DuplicateHalfEdge, got {err:?}");
+    };
+    assert_eq!(edge_kind, "Labeled");
+    assert_eq!(direction, "In");
+}
+
+/// A valued kind carries one `EdgeSeq` per half-edge; a short array would shift every later
+/// edge's identity onto the wrong edge.
+#[test]
+fn edge_slot_with_fewer_seqs_than_neighbors_is_rejected() {
+    let mut raw = labeled_edges_raw(&["p0", "p1"]);
+    raw.edge_storage[beta_in_labeled_slot()].edges_mut().pop();
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    let Error::EdgeSeqLengthMismatch {
+        expected, found, ..
+    } = &err
+    else {
+        panic!("expected EdgeSeqLengthMismatch, got {err:?}");
+    };
+    assert_eq!((*expected, *found), (2, 1));
+}
+
+/// The mirror: a kind carrying no property allocates no identity, so any seq on its halves
+/// names a store that was never written.
+#[test]
+fn edge_slot_of_a_none_typed_kind_carrying_seqs_is_rejected() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+    setup.add_edge(alpha_id, beta_id, TestEdge::Plain, None);
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+
+    let mut raw: RawGraph<TestSchema> = graph.into();
+    let beta_in_plain_index =
+        TestSchema::edge_storage_slot(TestNode::Beta, Direction::In, TestEdge::Plain).index();
+    raw.edge_storage[beta_in_plain_index]
+        .edges_mut()
+        .push(EdgeSeq::new(0).expect("seq fits in u32"));
+
+    let err = Graph::<TestSchema>::try_from(raw)
+        .err()
+        .expect("expected an error");
+    let Error::EdgeSeqLengthMismatch {
+        expected, found, ..
+    } = &err
+    else {
+        panic!("expected EdgeSeqLengthMismatch, got {err:?}");
+    };
+    assert_eq!((*expected, *found), (0, 1));
 }
 
 // `check_integrity` only takes the rayon-backed path above its size threshold, so every other
@@ -640,20 +648,21 @@ fn repoint_one_in_half_edge(raw: &mut RawGraph<TestSchema>) {
     panic!("no populated In/Labeled slot to corrupt");
 }
 
+/// Points one `In` half-edge at an `EdgeSeq` past its kind's store.
+///
+/// Leaves every offsets and neighbors array untouched, so the only broken invariant is that a
+/// half-edge names an edge that does not exist.
 #[cfg(feature = "parallel")]
-fn diverge_one_in_half_edge_value(raw: &mut RawGraph<TestSchema>) {
-    let foreign = raw.strings.intern("a value no half-edge was built with");
+fn point_one_in_half_edge_past_the_store(raw: &mut RawGraph<TestSchema>) {
+    let count = raw.edge_property_storage[TestEdge::Labeled.index()].count();
     for &node_kind in TestSchema::node_kinds() {
         let slot_index =
             TestSchema::edge_storage_slot(node_kind, Direction::In, TestEdge::Labeled).index();
-        let values = raw.edge_storage[slot_index].values_mut();
-        let Ok(strings) = values.try_as_string_mut() else {
-            continue;
-        };
-        if strings.is_empty() {
+        let edges = raw.edge_storage[slot_index].edges_mut();
+        if edges.is_empty() {
             continue;
         }
-        strings[0] = foreign;
+        edges[0] = EdgeSeq::new(count).expect("seq fits in u32");
         return;
     }
     panic!("no populated In/Labeled slot to corrupt");
@@ -700,17 +709,17 @@ fn pairing_defect_is_rejected_on_both_sides_of_the_parallel_threshold() {
 
 #[test]
 #[cfg(feature = "parallel")]
-fn value_divergence_is_rejected_on_both_sides_of_the_parallel_threshold() {
+fn dangling_edge_seq_is_rejected_on_both_sides_of_the_parallel_threshold() {
     for node_count in [BELOW_THRESHOLD_NODES, ABOVE_THRESHOLD_NODES] {
         let mut raw: RawGraph<TestSchema> = build_graph(node_count).into();
-        diverge_one_in_half_edge_value(&mut raw);
+        point_one_in_half_edge_past_the_store(&mut raw);
 
         let err = Graph::<TestSchema>::try_from(raw)
             .err()
             .expect("expected an error");
         assert!(
-            matches!(err, Error::EdgeHalfPropertyMismatch { .. }),
-            "expected a value mismatch for {node_count} nodes, got {err:?}"
+            matches!(err, Error::EdgeSeqOutOfBounds { .. }),
+            "expected a dangling edge seq for {node_count} nodes, got {err:?}"
         );
     }
 }

@@ -2,6 +2,7 @@ mod accessors;
 mod builder;
 mod combined_diff;
 mod common;
+mod compact;
 mod edge_add;
 mod edge_remove;
 mod graph_queries;

@@ -39,6 +39,7 @@ fn edge_property_is_visible_from_both_endpoints() {
     let out_prop = graph
         .get_edge_property(out_edges.remove(0))
         .expect("edge property lookup")
+        .next()
         .expect("property from Out perspective");
     assert_eq!(string_value(&graph, out_prop), "p0");
 
@@ -47,6 +48,7 @@ fn edge_property_is_visible_from_both_endpoints() {
     let in_prop = graph
         .get_edge_property(in_edges.remove(0))
         .expect("edge property lookup")
+        .next()
         .expect("property from In perspective");
     assert_eq!(string_value(&graph, in_prop), "p0");
 }
@@ -91,10 +93,7 @@ fn stored_edge_struct_and_edge_enum_match_graph_get_edges() {
     assert_eq!(labeled_edge.direction(), edge_id.direction());
     assert_eq!(labeled_edge.seq(), edge_id.seq());
 
-    let prop = labeled_edge
-        .property()
-        .expect("edge property lookup")
-        .expect("Labeled edges carry a property");
+    let prop = labeled_edge.property().expect("edge property lookup");
     assert_eq!(prop, "p0");
 
     let edge = Edge::new(
@@ -146,6 +145,7 @@ fn in_edge_properties_match_their_edges() {
         let prop = graph
             .get_edge_property(edge)
             .expect("edge property lookup")
+            .next()
             .expect("property from In perspective");
         assert_eq!(string_value(&graph, prop), expected);
     }

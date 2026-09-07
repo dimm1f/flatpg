@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use crate::edge::{Direction, EdgeHandle};
 use crate::error::Error;
 use crate::node::RawNodeId;
-use crate::property::PropertyType;
+use crate::property::{PropertyType, QuantityType};
 use crate::{
     EdgeDirectionKind, EdgeItemKind, EnumPropertyRegistry, ItemAll, ItemAsStr, ItemFromIndex,
     ItemIndex, ItemKindPropertyType, NodeItemKind, PropertyItemKind,
@@ -214,6 +214,20 @@ pub trait Schema: Sized + Clone + Copy + Debug {
     /// Returns the property type for the given node property kind.
     fn node_property_type(node_property_kind: Self::P) -> PropertyType {
         node_property_kind.property_type()
+    }
+
+    /// Returns how many values one edge of the given kind carries.
+    ///
+    /// This decides the shape of the kind's [`EdgePropertyStore`](crate::storage::EdgePropertyStore):
+    /// `One` stores a value per edge and lets an `EdgeSeq` index it directly, `Multi` adds the
+    /// CSR offsets array that turns an `EdgeSeq` into a range.
+    fn edge_property_quantity(edge_kind: Self::E) -> QuantityType {
+        edge_kind.property_quantity()
+    }
+
+    /// Returns how many values one node carries for the given property kind.
+    fn node_property_quantity(node_property_kind: Self::P) -> QuantityType {
+        node_property_kind.property_quantity()
     }
 
     /// Returns the registry index of the enum that edges of the given kind carry, or `None`

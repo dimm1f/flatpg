@@ -6,15 +6,12 @@ use crate::{
     node::{NodeId, NodeMeta, RawNodeId},
     property::PropertyValue,
     schema::{EdgeKind, Schema},
-    storage::{
-        EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, StorageArray, StoredProperty, ValueKey,
-    },
+    storage::{EdgeSeq, EdgeStorage, NodeMetaStorage, Offset, OffsetStorage},
 };
 
-use super::convert::to_stored_property;
 use super::slots::{
-    EdgeHalfBuckets, SlotBuckets, SlotHalfEdge, prepare_edge_removals, prepare_new_edges,
-    prepare_new_node_properties, prepare_property_updates,
+    EdgeHalfBuckets, EdgePropertyBatches, SlotBuckets, SlotHalfEdge, prepare_edge_removals,
+    prepare_new_edges, prepare_new_node_properties, prepare_property_updates,
 };
 use super::staged::{StagedDiff, StagedParts};
 use super::{Change, GraphDiff, HalfEdge, NewEdge, NewOrExistingNode, QuantifiedProperty};
@@ -147,13 +144,10 @@ impl<S: Schema> GraphDiff<S> {
         };
 
         let mut slot_edge_halves = EdgeHalfBuckets::new(S::edge_storage_size());
+        let mut edge_property_batches = EdgePropertyBatches::<S>::new();
 
         for new_edge in &self.new_edges {
-            let property = new_edge
-                .property
-                .as_ref()
-                .map(|prop| to_stored_property(prop, &mut graph.strings));
-            let Some(halves) = edge_to_halves(new_edge, resolve_node_ref, property) else {
+            let Some(mut halves) = edge_to_halves(new_edge, resolve_node_ref) else {
                 continue;
             };
             // Both halves must survive together: an edge with either endpoint invalid or
@@ -178,6 +172,20 @@ impl<S: Schema> GraphDiff<S> {
             }) {
                 continue;
             }
+
+            // Only here is the edge certain to be stored, so only here does it claim its
+            // identity: an edge dropped above must not burn an `EdgeSeq`, or the store would
+            // gain a gap that no removal ever accounts for.
+            let edge_seq = edge_property_batches.push(
+                &graph.edge_property_storage,
+                new_edge.kind,
+                new_edge.property.as_ref(),
+                &mut graph.strings,
+            )?;
+            for half in &mut halves {
+                half.edge_seq = edge_seq;
+            }
+
             for half in halves {
                 let kind_index = half.node.kind().index();
                 let slot_index =
@@ -189,7 +197,7 @@ impl<S: Schema> GraphDiff<S> {
                     SlotHalfEdge {
                         seq: half.node.seq(),
                         neighbor: half.neighbor,
-                        property: half.property,
+                        edge_seq: half.edge_seq,
                     },
                 );
             }
@@ -210,6 +218,7 @@ impl<S: Schema> GraphDiff<S> {
             property_replacements,
             edge_replacements,
             property_appends,
+            edge_property_appends: edge_property_batches.into_appends(),
             edge_inserts,
         })
     }
@@ -262,21 +271,43 @@ fn classify_changes<'a, S: Schema>(
                 let src = edge.src_node_id();
                 let dst = edge.dst();
                 let edge_kind = S::resolve_edge_kind(edge.handle())?;
-                let primary_seq = edge.handle().seq();
+                let wanted = edge.handle().edge_seq();
 
                 let (primary, primary_dir, secondary, secondary_dir) =
                     S::resolve_edge_direction(edge.handle())?.orient_edge(src, dst);
 
-                // Record the primary half first: this is what detects the same edge
-                // being queued for removal twice in one diff, which collapses into a
-                // single removal instead of being processed twice. This needs to happen
-                // before the secondary-half scan below, or that scan would instead fail
-                // once its position was already excluded by the first occurrence.
                 let primary_kind = S::resolve_node_kind(primary)?;
                 let primary_slot_index =
                     S::edge_storage_slot(primary_kind, primary_dir, edge_kind).index();
                 let primary_count = graph.node_meta_storage[primary_kind.index()].len();
 
+                let already_claimed_primary = slot_edge_removals
+                    .get(primary_slot_index)
+                    .and_then(|bucket| bucket.get(primary.seq()))
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+
+                // The recorded position is only a hint: an earlier removal may have shifted
+                // every later edge on this node down. What names the edge is its identity, so
+                // the hint is verified against it and re-scanned when it no longer holds.
+                let primary_seq = find_half_edge_seq(
+                    &graph.edge_storage,
+                    primary,
+                    primary_slot_index,
+                    primary_dir,
+                    edge_kind,
+                    HalfEdgeQuery {
+                        target: secondary,
+                        excluded: already_claimed_primary,
+                        wanted,
+                        hint: Some(edge.handle().seq()),
+                    },
+                )?;
+
+                // Record the primary half before scanning for its mirror: this is what
+                // collapses the same edge being queued for removal twice in one diff into a
+                // single removal. Doing it after would instead make the second occurrence's
+                // mirror scan fail, its position already excluded by the first.
                 let bucket = &mut slot_edge_removals.bucket(primary_slot_index, primary_count)
                     [primary.seq()];
 
@@ -297,23 +328,28 @@ fn classify_changes<'a, S: Schema>(
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
 
-                let wanted = half_edge_value_key(
-                    &graph.edge_storage,
-                    primary,
-                    primary_slot_index,
-                    primary_seq,
-                );
+                // Read the identity back off the half that was actually resolved, rather than
+                // trusting the caller's: a stale id may carry none at all.
+                let wanted = wanted.or_else(|| {
+                    half_edge_seq(
+                        &graph.edge_storage,
+                        primary,
+                        primary_slot_index,
+                        primary_seq,
+                    )
+                });
 
-                let secondary_seq = find_reverse_edge_seq(
+                let secondary_seq = find_half_edge_seq(
                     &graph.edge_storage,
                     secondary,
                     secondary_slot_index,
                     secondary_dir,
                     edge_kind,
-                    ReverseHalfQuery {
+                    HalfEdgeQuery {
                         target: primary,
                         excluded: already_claimed,
                         wanted,
+                        hint: None,
                     },
                 )?;
 
@@ -326,30 +362,36 @@ fn classify_changes<'a, S: Schema>(
     Ok((node_tombstones, slot_property_updates, slot_edge_removals))
 }
 
-// Searches `node`'s half-edges in `slot_index` for `target`, skipping any local seq already
-// in `excluded`. Takes `slot_index` precomputed by the caller (who already needed it to
-// resolve `node`'s kind for other purposes) rather than re-deriving it from `node` here.
-fn find_reverse_edge_seq<S>(
+/// Finds the local position of one half-edge in `node`'s `slot_index` adjacency list.
+///
+/// Takes `slot_index` precomputed by the caller, who already needed it to resolve `node`'s
+/// kind for other purposes, rather than re-deriving it from `node` here.
+fn find_half_edge_seq<S>(
     edge_storage: &EdgeStorage<S>,
     node: RawNodeId,
     slot_index: usize,
     direction: Direction,
     edge_kind: EdgeKind<S>,
-    query: ReverseHalfQuery<'_>,
+    query: HalfEdgeQuery<'_>,
 ) -> Result<usize, Error>
 where
     S: Schema,
 {
-    let ReverseHalfQuery {
+    let HalfEdgeQuery {
         target,
         excluded,
         wanted,
+        hint,
     } = query;
     let slot = &edge_storage[slot_index];
 
     let Some((start, end)) = slot.get_offset(node.seq()) else {
         return Err(Error::node_offset_not_found(node.seq()));
     };
+
+    let degree = end.checked_sub(start)?;
+    let seq_at = |local_seq: usize| slot.edges().get(start.value() + local_seq).copied();
+    let neighbor_at = |local_seq: usize| slot.neighbors().get(start.value() + local_seq).copied();
 
     let candidates = || {
         slot.get_neighbors(start, end)
@@ -358,55 +400,71 @@ where
             .map(|(local_seq, _)| local_seq)
     };
 
-    let matching_value = wanted.and_then(|wanted| {
-        candidates()
-            .find(|&local_seq| ValueKey::of(slot.values(), start.value() + local_seq) == wanted)
-    });
+    let found = match wanted {
+        // A kind that allocates `EdgeSeq`s names its edges exactly: the half is the one
+        // carrying that seq, and nothing else will do. `excluded` plays no part — a seq
+        // appears once per direction — and there is no falling back to "any half to the right
+        // neighbor", which would silently claim the wrong one among parallel edges.
+        Some(wanted) => (0..degree).find(|&local_seq| seq_at(local_seq) == Some(wanted)),
+        // A kind carrying no property has nothing to tell its parallel edges apart. The
+        // caller's position is still the best guess, so it is used when it still points at the
+        // right neighbor; otherwise any unclaimed half to that neighbor will do, since edges
+        // holding no data are interchangeable.
+        //
+        // `excluded` deliberately does not filter the hint: a position already claimed means
+        // the caller is removing the same edge twice, which the caller collapses by finding
+        // that same position again.
+        None => hint
+            .filter(|&local_seq| local_seq < degree && neighbor_at(local_seq) == Some(target))
+            .or_else(|| candidates().next()),
+    };
 
-    matching_value
-        .or_else(|| candidates().next())
-        .ok_or_else(|| match (node.try_into(), target.try_into()) {
-            (Ok::<NodeId<S>, _>(node), Ok::<NodeId<S>, _>(target)) => {
-                Error::reverse_edge_not_found(
-                    target.to_string(),
-                    node.to_string(),
-                    direction.as_str().to_owned(),
-                    edge_kind.as_str().to_owned(),
-                )
-            }
-            (Err(e), _) | (_, Err(e)) => e,
-        })
+    found.ok_or_else(|| match (node.try_into(), target.try_into()) {
+        (Ok::<NodeId<S>, _>(node), Ok::<NodeId<S>, _>(target)) => Error::reverse_edge_not_found(
+            target.to_string(),
+            node.to_string(),
+            direction.as_str().to_owned(),
+            edge_kind.as_str().to_owned(),
+        ),
+        (Err(e), _) | (_, Err(e)) => e,
+    })
 }
 
-struct ReverseHalfQuery<'a> {
+struct HalfEdgeQuery<'a> {
+    /// The node on the other end of the half-edge being looked for.
     target: RawNodeId,
+    /// Local positions already claimed by earlier removals in this diff.
     excluded: &'a [usize],
-    wanted: Option<ValueKey>,
+    /// The identity the half must carry, for kinds that allocate one.
+    wanted: Option<EdgeSeq>,
+    /// The caller's recorded position, tried before scanning. Only consulted for kinds with no
+    /// identity to look up.
+    hint: Option<usize>,
 }
 
-fn half_edge_value_key<S>(
+/// Returns the `EdgeSeq` of one half-edge, or `None` when its position is out of range or its
+/// edge kind carries no property and so allocates no `EdgeSeq`.
+fn half_edge_seq<S>(
     edge_storage: &EdgeStorage<S>,
     node: RawNodeId,
     slot_index: usize,
     local_seq: usize,
-) -> Option<ValueKey>
+) -> Option<EdgeSeq>
 where
     S: Schema,
 {
     let slot = &edge_storage[slot_index];
-    if matches!(slot.values(), StorageArray::None) {
-        return None;
-    }
     let (start, end) = slot.get_offset(node.seq())?;
     let index = start.value().checked_add(local_seq)?;
-    (index < end.value()).then(|| ValueKey::of(slot.values(), index))
+    if index >= end.value() {
+        return None;
+    }
+    slot.edges().get(index).copied()
 }
 
-fn edge_to_halves<F, S>(
-    new_edge: &NewEdge<S>,
-    node_resolver: F,
-    property: Option<StoredProperty>,
-) -> Option<[HalfEdge<S>; 2]>
+/// Builds an edge's two halves. Both are left without an `EdgeSeq`: the caller assigns one
+/// only after the edge has passed the checks that could still drop it.
+fn edge_to_halves<F, S>(new_edge: &NewEdge<S>, node_resolver: F) -> Option<[HalfEdge<S>; 2]>
 where
     F: Fn(&NewOrExistingNode) -> Option<NodeId<S>>,
     S: Schema,
@@ -419,7 +477,7 @@ where
         node: src_node,
         neighbor: RawNodeId::from(&dst_node),
         direction: Direction::src_half(),
-        property: property.clone(),
+        edge_seq: None,
     };
 
     let dst_half = HalfEdge {
@@ -427,7 +485,7 @@ where
         node: dst_node,
         neighbor: RawNodeId::from(&src_node),
         direction: Direction::dst_half(),
-        property,
+        edge_seq: None,
     };
 
     Some([src_half, dst_half])

@@ -318,6 +318,7 @@ fn add_edge_with_property_stores_property() {
     let property = graph
         .get_edge_property(edges.into_iter().next().unwrap())
         .expect("edge property lookup")
+        .next()
         .expect("edge property should be set");
     assert_eq!(string_value(&graph, property), "x");
 }

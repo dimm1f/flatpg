@@ -86,15 +86,32 @@ pub enum Error {
     UnresolvedEnumKind(usize),
     #[error("node count {0} exceeds the maximum addressable by a u32")]
     NodeCountOverflow(usize),
+    #[error("edge count {0} exceeds the maximum addressable by a u32")]
+    EdgeCountOverflow(usize),
     #[error(
-        "edge property mismatch for {edge_kind} edge {src} -> {dst}: the half in {src}'s Out \
-         {edge_kind} list and the half in {dst}'s In {edge_kind} list carry different property \
-         values"
+        "edge seq {edge_seq} of edge kind \"{edge_kind}\" is out of bounds (edge count: {count})"
     )]
-    EdgeHalfPropertyMismatch {
+    EdgeSeqOutOfBounds {
         edge_kind: String,
-        src: String,
-        dst: String,
+        edge_seq: usize,
+        count: usize,
+    },
+    #[error(
+        "edge seq array length mismatch for slot \"{slot}\": expected {expected}, found {found}"
+    )]
+    EdgeSeqLengthMismatch {
+        slot: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error(
+        "edge seq {edge_seq} of edge kind \"{edge_kind}\" is claimed by more than one {direction} \
+         half-edge; each edge has exactly one half per direction"
+    )]
+    DuplicateHalfEdge {
+        edge_kind: String,
+        edge_seq: usize,
+        direction: String,
     },
 }
 
@@ -173,20 +190,48 @@ impl Error {
         }
     }
 
-    pub fn edge_half_property_mismatch(
+    pub fn node_count_overflow(count: usize) -> Self {
+        Self::NodeCountOverflow(count)
+    }
+
+    pub fn edge_count_overflow(count: usize) -> Self {
+        Self::EdgeCountOverflow(count)
+    }
+
+    pub fn edge_seq_out_of_bounds(
         edge_kind: impl Into<String>,
-        src: impl Into<String>,
-        dst: impl Into<String>,
+        edge_seq: usize,
+        count: usize,
     ) -> Self {
-        Self::EdgeHalfPropertyMismatch {
+        Self::EdgeSeqOutOfBounds {
             edge_kind: edge_kind.into(),
-            src: src.into(),
-            dst: dst.into(),
+            edge_seq,
+            count,
         }
     }
 
-    pub fn node_count_overflow(count: usize) -> Self {
-        Self::NodeCountOverflow(count)
+    pub fn edge_seq_length_mismatch(
+        slot: impl Into<String>,
+        expected: usize,
+        found: usize,
+    ) -> Self {
+        Self::EdgeSeqLengthMismatch {
+            slot: slot.into(),
+            expected,
+            found,
+        }
+    }
+
+    pub fn duplicate_half_edge(
+        edge_kind: impl Into<String>,
+        edge_seq: usize,
+        direction: impl Into<String>,
+    ) -> Self {
+        Self::DuplicateHalfEdge {
+            edge_kind: edge_kind.into(),
+            edge_seq,
+            direction: direction.into(),
+        }
     }
 
     pub fn unresolved_string_id(string_id: impl Into<String>) -> Self {

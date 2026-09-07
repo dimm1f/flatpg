@@ -96,6 +96,12 @@ pub enum TestEdge {
     RefersTo,
     #[property(typ = Enum<Status>)]
     Tagged,
+    /// Exercises the `Multi` edge store: an `EdgeSeq` indexes a CSR range rather than a
+    /// single value.
+    #[property(typ = String, quantity = Multi)]
+    Annotations,
+    #[property(typ = Int, quantity = Multi)]
+    Measurements,
 }
 
 #[derive(Clone, Copy, Default, Debug)]

@@ -111,8 +111,8 @@ pub(crate) fn enum_typ_inner_type(typ: &TypePath) -> Result<&syn::Type, Error> {
 pub(crate) mod test_support {
     use proc_macro2::TokenStream;
     use syn::{
-        Expr, File, ImplItem, ImplItemConst, ImplItemFn, Item, ItemEnum, ItemImpl, Signature, Stmt,
-        parse_str, parse2,
+        Expr, File, ImplItem, ImplItemConst, ImplItemFn, Item, ItemEnum, ItemImpl, ItemTrait,
+        Signature, Stmt, TraitItem, TraitItemFn, parse_str, parse2,
     };
 
     pub(crate) fn parse_enum(src: &str) -> ItemEnum {
@@ -150,6 +150,27 @@ pub(crate) mod test_support {
     pub(crate) fn find_method<'a>(impl_block: &'a ItemImpl, name: &str) -> Option<&'a ImplItemFn> {
         impl_block.items.iter().find_map(|item| {
             let ImplItem::Fn(method) = item else {
+                return None;
+            };
+            (method.sig.ident == name).then_some(method)
+        })
+    }
+
+    pub(crate) fn find_trait<'a>(file: &'a File, name: &str) -> Option<&'a ItemTrait> {
+        file.items.iter().find_map(|item| {
+            let Item::Trait(item_trait) = item else {
+                return None;
+            };
+            (item_trait.ident == name).then_some(item_trait)
+        })
+    }
+
+    pub(crate) fn find_trait_method<'a>(
+        item_trait: &'a ItemTrait,
+        name: &str,
+    ) -> Option<&'a TraitItemFn> {
+        item_trait.items.iter().find_map(|item| {
+            let TraitItem::Fn(method) = item else {
                 return None;
             };
             (method.sig.ident == name).then_some(method)

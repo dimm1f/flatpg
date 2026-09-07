@@ -168,7 +168,7 @@ fn edge_scalar_properties_round_trip() {
         active_id.direction(),
         active_id.seq(),
     );
-    assert!(active.property().unwrap().unwrap());
+    assert!(active.property().unwrap());
 
     let weight_id = edge_of(TestEdge::Weight);
     let weight = WeightEdge::new(
@@ -178,7 +178,7 @@ fn edge_scalar_properties_round_trip() {
         weight_id.direction(),
         weight_id.seq(),
     );
-    assert_eq!(weight.property().unwrap().unwrap(), 9);
+    assert_eq!(weight.property().unwrap(), 9);
 
     let priority_id = edge_of(TestEdge::Priority);
     let priority = PriorityEdge::new(
@@ -188,7 +188,7 @@ fn edge_scalar_properties_round_trip() {
         priority_id.direction(),
         priority_id.seq(),
     );
-    assert_eq!(priority.property().unwrap().unwrap(), -3);
+    assert_eq!(priority.property().unwrap(), -3);
 
     let distance_id = edge_of(TestEdge::Distance);
     let distance = DistanceEdge::new(
@@ -198,7 +198,7 @@ fn edge_scalar_properties_round_trip() {
         distance_id.direction(),
         distance_id.seq(),
     );
-    assert_eq!(distance.property().unwrap().unwrap(), 120);
+    assert_eq!(distance.property().unwrap(), 120);
 
     let timestamp_id = edge_of(TestEdge::Timestamp);
     let timestamp = TimestampEdge::new(
@@ -208,7 +208,7 @@ fn edge_scalar_properties_round_trip() {
         timestamp_id.direction(),
         timestamp_id.seq(),
     );
-    assert_eq!(timestamp.property().unwrap().unwrap(), 9_999_999_999);
+    assert_eq!(timestamp.property().unwrap(), 9_999_999_999);
 
     let fraction_id = edge_of(TestEdge::Fraction);
     let fraction = FractionEdge::new(
@@ -218,7 +218,7 @@ fn edge_scalar_properties_round_trip() {
         fraction_id.direction(),
         fraction_id.seq(),
     );
-    assert_eq!(fraction.property().unwrap().unwrap(), 0.25);
+    assert_eq!(fraction.property().unwrap(), 0.25);
 
     let precision_id = edge_of(TestEdge::Precision);
     let precision = PrecisionEdge::new(
@@ -228,7 +228,7 @@ fn edge_scalar_properties_round_trip() {
         precision_id.direction(),
         precision_id.seq(),
     );
-    assert_eq!(precision.property().unwrap().unwrap(), 0.125);
+    assert_eq!(precision.property().unwrap(), 0.125);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn edge_with_node_id_property_round_trips() {
         edge_id.seq(),
     );
 
-    let target = refers_to.property().unwrap().unwrap();
+    let target = refers_to.property().unwrap();
     assert_eq!(target.kind(), TestNode::Beta);
     assert_eq!(target.seq(), beta.seq());
 }
@@ -319,5 +319,110 @@ fn edge_with_enum_property_round_trips() {
         edge_id.direction(),
         edge_id.seq(),
     );
-    assert_eq!(tagged.property().unwrap().unwrap(), Status::Inactive);
+    assert_eq!(tagged.property().unwrap(), Status::Inactive);
+}
+
+/// A `Multi` edge kind stores a run per edge, read back whole and in order — and both halves
+/// index the same run, so either endpoint sees the same values.
+#[test]
+fn multi_quantity_edge_property_round_trips_from_both_halves() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
+    diff.add_edge_with(
+        alpha_id,
+        beta_id,
+        TestEdge::Annotations,
+        vec![
+            PropertyValue::String("first".to_string()),
+            PropertyValue::String("second".to_string()),
+            PropertyValue::String("third".to_string()),
+        ],
+    );
+
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let alpha = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+    let beta = graph
+        .nodes_by_kind(TestNode::Beta)
+        .next()
+        .expect("Beta node");
+
+    for (node, direction) in [(alpha, Direction::Out), (beta, Direction::In)] {
+        let edge_id = collect_edges(&graph, node, TestEdge::Annotations, direction)
+            .into_iter()
+            .next()
+            .expect("one edge");
+        let edge = AnnotationsEdge::new(
+            &graph,
+            edge_id.src_node(),
+            edge_id.dst_node(),
+            edge_id.direction(),
+            edge_id.seq(),
+        );
+        assert_eq!(
+            edge.property().unwrap(),
+            vec!["first", "second", "third"],
+            "values read from the {direction:?} half"
+        );
+    }
+}
+
+/// Parallel `Multi` edges keep their own runs: the CSR offsets in the kind's store must not
+/// let one edge's range bleed into the next.
+#[test]
+fn parallel_multi_quantity_edges_keep_separate_runs() {
+    let mut diff = GraphDiff::<TestSchema>::default();
+    let alpha_id = diff.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta_id = diff.add_node(builders::BetaNodeBuilder::new().build());
+    diff.add_edge_with(
+        alpha_id,
+        beta_id,
+        TestEdge::Measurements,
+        vec![PropertyValue::Int(1), PropertyValue::Int(2)],
+    );
+    diff.add_edge_with(
+        alpha_id,
+        beta_id,
+        TestEdge::Measurements,
+        PropertyValue::Int(3),
+    );
+    diff.add_edge_with(
+        alpha_id,
+        beta_id,
+        TestEdge::Measurements,
+        Vec::<PropertyValue>::new(),
+    );
+
+    let (graph, _) = diff.apply(Graph::new()).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let alpha = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+    let runs: Vec<Vec<i32>> = collect_edges(&graph, alpha, TestEdge::Measurements, Direction::Out)
+        .into_iter()
+        .map(|edge_id| {
+            MeasurementsEdge::new(
+                &graph,
+                edge_id.src_node(),
+                edge_id.dst_node(),
+                edge_id.direction(),
+                edge_id.seq(),
+            )
+            .property()
+            .expect("edge property lookup")
+        })
+        .collect();
+
+    assert_eq!(runs, vec![vec![1, 2], vec![3], vec![]]);
 }

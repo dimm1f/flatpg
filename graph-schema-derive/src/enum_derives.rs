@@ -4,7 +4,7 @@ use quote::{ToTokens, format_ident, quote};
 use syn::{Attribute, Error, ItemEnum, LitStr, TypePath, Variant, parse2, punctuated::Punctuated};
 
 use crate::common::{enum_typ_inner_type, typ_last_segment_name};
-use crate::property_trait_derives::TYP_ENUM;
+use crate::property_trait_derives::{TYP_ENUM, TYP_NONE, quantity_is_multi};
 
 pub(crate) const PROPERTY_ATTR: &str = "property";
 const PROPERTY_TYPE_KEY: &str = "typ";
@@ -216,11 +216,27 @@ pub fn enum_item_from_str_derive(input: &ItemEnum) -> TokenStream {
     }
 }
 
-pub(crate) fn absent_attribute_error<T>(span: T, has_qty: bool) -> Error
+/// How a kind's `#[property(...)]` attribute treats `quantity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuantitySupport {
+    /// Node property kinds, where `quantity` is mandatory.
+    Required,
+    /// Edge kinds, where it is optional and defaults to `One` — an edge carried exactly one
+    /// value before `Multi` was representable, so schemas that omit it keep compiling.
+    Optional,
+}
+
+impl QuantitySupport {
+    fn is_required(self) -> bool {
+        self == Self::Required
+    }
+}
+
+pub(crate) fn absent_attribute_error<T>(span: T, quantity: QuantitySupport) -> Error
 where
     T: ToTokens,
 {
-    let msg = if has_qty {
+    let msg = if quantity.is_required() {
         format!(
             "missing required attribute: #[{PROPERTY_ATTR}(typ = Int, quantity = Multi)] \
              — both `typ` and `quantity` are mandatory. \
@@ -229,8 +245,8 @@ where
     } else {
         format!(
             "missing required attribute: #[{PROPERTY_ATTR}(typ = Int)] \
-             — `typ` is mandatory. \
-             Full form: #[{PROPERTY_ATTR}(typ = <PropertyType variant>)]"
+             — `typ` is mandatory, `quantity` is optional and defaults to `One`. \
+             Full form: #[{PROPERTY_ATTR}(typ = <PropertyType variant>, quantity = <QuantityType variant>)]"
         )
     };
     Error::new_spanned(span, msg)
@@ -293,7 +309,7 @@ fn variant_label(variant: &Ident, attrs: &[Attribute]) -> Result<LitStr, Error> 
     Ok(LitStr::new(&label, variant.span()))
 }
 
-pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenStream {
+pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: QuantitySupport) -> TokenStream {
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = &input.generics.split_for_impl();
 
@@ -349,14 +365,27 @@ pub fn item_kind_property_type_derive(input: &ItemEnum, has_qty: bool) -> TokenS
 
             let typ = quote! {#ident::#variant => ::flatpg::property::PropertyType::#typ_ident};
 
-            let qty = if has_qty {
-                let prop_qty = attr
-                    .prop_qty
-                    .as_ref()
-                    .ok_or_else(|| absent_attribute_error(variant, has_qty))?;
-                quote! {#ident::#variant => ::flatpg::property::QuantityType::#prop_qty}
-            } else {
-                quote! {#ident::#variant => ::flatpg::property::QuantityType::One}
+            let qty = match (attr.prop_qty.as_ref(), has_qty) {
+                (Some(prop_qty), _) => {
+                    // A kind that stores nothing cannot store several of it, and letting the
+                    // declaration through would give the store a shape its values never fill.
+                    if typ_name == TYP_NONE && quantity_is_multi(prop_qty) {
+                        return Err(Error::new_spanned(
+                            prop_qty,
+                            format!(
+                                "`quantity = Multi` is not valid with `typ = None` on `{variant}`: \
+                                 a kind carrying no value cannot carry several"
+                            ),
+                        ));
+                    }
+                    quote! {#ident::#variant => ::flatpg::property::QuantityType::#prop_qty}
+                }
+                (None, QuantitySupport::Required) => {
+                    return Err(absent_attribute_error(variant, has_qty));
+                }
+                (None, QuantitySupport::Optional) => {
+                    quote! {#ident::#variant => ::flatpg::property::QuantityType::One}
+                }
             };
 
             Ok((typ, qty, enum_index))
@@ -809,7 +838,10 @@ mod tests {
     #[test]
     fn property_type_derive_no_qty_valid() {
         let input = parse_enum(r#"enum E { #[property(typ = Int)] A, #[property(typ = Bool)] B }"#);
-        let file = parse_output(item_kind_property_type_derive(&input, false));
+        let file = parse_output(item_kind_property_type_derive(
+            &input,
+            QuantitySupport::Optional,
+        ));
         let impl_block = find_impl(&file, "ItemKindPropertyType", "E").expect("impl not found");
 
         assert_eq!(
@@ -846,7 +878,10 @@ mod tests {
     fn property_type_derive_pub_enum_methods_have_no_explicit_vis() {
         let input =
             parse_enum(r#"pub enum E { #[property(typ = Int)] A, #[property(typ = Bool)] B }"#);
-        let file = parse_output(item_kind_property_type_derive(&input, false));
+        let file = parse_output(item_kind_property_type_derive(
+            &input,
+            QuantitySupport::Optional,
+        ));
         let impl_block = find_impl(&file, "ItemKindPropertyType", "E").expect("impl not found");
 
         let prop_method =
@@ -858,11 +893,8 @@ mod tests {
         assert_inherited_vis(qty_method);
     }
 
-    #[test]
-    fn property_type_derive_no_qty_ignores_quantity_key() {
-        let input = parse_enum(r#"enum E { #[property(typ = Int, quantity = Multi)] A }"#);
-        let ts = item_kind_property_type_derive(&input, false);
-        assert!(!has_compile_error(ts.clone()));
+    /// Returns the `QuantityType` variant the first match arm of `property_quantity` yields.
+    fn first_quantity_arm(ts: TokenStream) -> String {
         let file = parse_output(ts);
         let impl_block = find_impl(&file, "ItemKindPropertyType", "E").unwrap();
         let qty_method = find_method(impl_block, "property_quantity").unwrap();
@@ -872,14 +904,43 @@ mod tests {
         let Expr::Path(p) = m.arms[0].body.as_ref() else {
             panic!("expected path")
         };
-        assert_eq!(p.path.segments.last().unwrap().ident, "One");
+        p.path.segments.last().unwrap().ident.to_string()
+    }
+
+    #[test]
+    fn property_type_derive_optional_qty_honours_an_explicit_quantity() {
+        let input = parse_enum(r#"enum E { #[property(typ = Int, quantity = Multi)] A }"#);
+        let ts = item_kind_property_type_derive(&input, QuantitySupport::Optional);
+        assert!(!has_compile_error(ts.clone()));
+        assert_eq!(first_quantity_arm(ts), "Multi");
+    }
+
+    /// Edges carried exactly one value before `Multi` was representable, so a schema that
+    /// omits `quantity` must keep meaning `One`.
+    #[test]
+    fn property_type_derive_optional_qty_defaults_to_one() {
+        let input = parse_enum(r#"enum E { #[property(typ = Int)] A }"#);
+        let ts = item_kind_property_type_derive(&input, QuantitySupport::Optional);
+        assert!(!has_compile_error(ts.clone()));
+        assert_eq!(first_quantity_arm(ts), "One");
+    }
+
+    /// A kind storing nothing cannot store several of it.
+    #[test]
+    fn property_type_derive_rejects_multi_on_a_none_typed_variant() {
+        let input = parse_enum(r#"enum E { #[property(typ = None, quantity = Multi)] A }"#);
+        assert!(has_compile_error(item_kind_property_type_derive(
+            &input,
+            QuantitySupport::Optional
+        )));
     }
 
     #[test]
     fn property_type_derive_no_qty_missing_attribute_emits_compile_error() {
         let input = parse_enum("enum E { A, B }");
         assert!(has_compile_error(item_kind_property_type_derive(
-            &input, false
+            &input,
+            QuantitySupport::Optional
         )));
     }
 
@@ -887,7 +948,8 @@ mod tests {
     fn property_type_derive_no_qty_missing_typ_emits_compile_error() {
         let input = parse_enum(r#"enum E { #[property(quantity = One)] A }"#);
         assert!(has_compile_error(item_kind_property_type_derive(
-            &input, false
+            &input,
+            QuantitySupport::Optional
         )));
     }
 
@@ -896,7 +958,10 @@ mod tests {
         let input = parse_enum(
             r#"enum E { #[property(typ = Int, quantity = One)] A, #[property(typ = Bool, quantity = Multi)] B }"#,
         );
-        let file = parse_output(item_kind_property_type_derive(&input, true));
+        let file = parse_output(item_kind_property_type_derive(
+            &input,
+            QuantitySupport::Required,
+        ));
         let impl_block = find_impl(&file, "ItemKindPropertyType", "E").expect("impl not found");
 
         let prop_method =
@@ -928,7 +993,8 @@ mod tests {
     fn property_type_derive_with_qty_missing_attribute_emits_compile_error() {
         let input = parse_enum("enum E { A }");
         assert!(has_compile_error(item_kind_property_type_derive(
-            &input, true
+            &input,
+            QuantitySupport::Required
         )));
     }
 
@@ -936,7 +1002,8 @@ mod tests {
     fn property_type_derive_with_qty_missing_typ_emits_compile_error() {
         let input = parse_enum(r#"enum E { #[property(quantity = One)] A }"#);
         assert!(has_compile_error(item_kind_property_type_derive(
-            &input, true
+            &input,
+            QuantitySupport::Required
         )));
     }
 
@@ -944,7 +1011,8 @@ mod tests {
     fn property_type_derive_with_qty_missing_quantity_emits_compile_error() {
         let input = parse_enum(r#"enum E { #[property(typ = Int)] A }"#);
         assert!(has_compile_error(item_kind_property_type_derive(
-            &input, true
+            &input,
+            QuantitySupport::Required
         )));
     }
 
@@ -972,7 +1040,10 @@ mod tests {
                 #[property(typ = Int, quantity = One)] B,
             }"#,
         );
-        let file = parse_output(item_kind_property_type_derive(&input, true));
+        let file = parse_output(item_kind_property_type_derive(
+            &input,
+            QuantitySupport::Required,
+        ));
         let impl_block = find_impl(&file, "ItemKindPropertyType", "E").expect("impl not found");
 
         let method =
@@ -988,7 +1059,8 @@ mod tests {
     fn property_type_derive_enum_without_type_argument_emits_compile_error() {
         let input = parse_enum(r#"enum E { #[property(typ = Enum, quantity = One)] A }"#);
         assert!(has_compile_error(item_kind_property_type_derive(
-            &input, true
+            &input,
+            QuantitySupport::Required
         )));
     }
 
@@ -997,7 +1069,8 @@ mod tests {
         let input =
             parse_enum(r#"enum E { #[property(typ = Enum<Status, Color>, quantity = One)] A }"#);
         assert!(has_compile_error(item_kind_property_type_derive(
-            &input, true
+            &input,
+            QuantitySupport::Required
         )));
     }
 }

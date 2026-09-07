@@ -4,11 +4,12 @@ use syn::{Error, Ident, ItemEnum, TypePath, Variant};
 
 use crate::common::{SCHEMA_PARAM, parse_kind_attr, typ_last_segment_name};
 use crate::enum_derives::{
-    PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
-    require_type_param,
+    PROPERTY_ATTR, PropertyItemAttrs, QuantitySupport, absent_attribute_error, find_attribute,
+    parse_property_attr, require_type_param,
 };
 use crate::property_trait_derives::{
-    NODE_ID_DEPRECATION_NOTE, PropertyBinding, TYP_NODE_ID, TYP_NONE, TYP_STRING, property_binding,
+    NODE_ID_DEPRECATION_NOTE, PropertyFetch, TYP_NODE_ID, TYP_NONE, TYP_STRING,
+    property_accessor_body, property_binding, property_return_type, quantity_is_multi,
 };
 
 const EDGE_KIND_ATTR: &str = "edge_kind";
@@ -29,57 +30,77 @@ fn edge_struct_name(name: &Ident) -> Ident {
     format_ident!("{}Edge", name)
 }
 
-fn build_edge_property_method(
+fn edge_property_trait_name(name: &Ident) -> Ident {
+    format_ident!("{}EdgeProperty", name)
+}
+
+/// Builds one edge kind's property trait, or nothing when the kind carries no property.
+///
+/// Mirrors the node side's trait-per-property (`build_property_trait`): the accessor is a
+/// trait method bounded on [`StoredEdge`], not an inherent one, so it can be named in generic
+/// code and so `graph()`/`edge()` come from the supertrait. The trait is named after the edge
+/// kind rather than a property, because an edge kind declares its property itself; the
+/// `EdgeProperty` suffix keeps it from colliding with a node property trait of the same name.
+fn build_edge_property_trait(
+    variant: &Ident,
+    struct_name: &Ident,
     attrs: &PropertyItemAttrs,
     schema_ty: &TypePath,
     vis: &syn::Visibility,
 ) -> Result<TokenStream, Error> {
-    let variant = &attrs.variant;
     let typ = attrs
         .prop_typ
         .as_ref()
-        .ok_or_else(|| absent_attribute_error(variant, false))?;
+        .ok_or_else(|| absent_attribute_error(variant, QuantitySupport::Optional))?;
     let typ_name = typ_last_segment_name(typ)?;
 
+    // A kind carrying no value gets no accessor at all, which is also what keeps a caller from
+    // ever reaching the untyped `Graph::get_edge_property` path for one.
     if typ_name == TYP_NONE {
         return Ok(quote!());
     }
 
-    let PropertyBinding {
-        elem_ty,
-        pattern,
-        expr,
-        prop_type_path,
-    } = property_binding(&typ_name, typ, &quote!(#schema_ty))?;
+    let is_multi = attrs.prop_qty.as_ref().is_some_and(quantity_is_multi);
+    let binding = property_binding(&typ_name, typ, &quote!(#schema_ty))?;
+    let elem_ty = &binding.elem_ty;
 
-    let self_param = if typ_name == TYP_STRING {
-        quote!(&'a self)
+    // The schema is a concrete type here, unlike the node side's generic `S`, so a borrowed
+    // return needs only the method's own lifetime and no extra bound.
+    let (generics, self_param) = if typ_name == TYP_STRING {
+        (quote!(<'p>), quote!(&'p self))
     } else {
-        quote!(&self)
+        (quote!(), quote!(&self))
     };
 
     let deprecated =
         (typ_name == TYP_NODE_ID).then(|| quote!(#[deprecated(note = #NODE_ID_DEPRECATION_NOTE)]));
 
+    let return_ty = property_return_type(elem_ty, is_multi);
+    // No `Option` in the return type: a kind declaring a property gives every one of its edges
+    // an `EdgeSeq`, so the value is always there — the same shape the node accessors have.
+    // `One` takes the scalar read, which skips building an iterator to yield a single value.
+    let fetch = if is_multi {
+        PropertyFetch::Iterator(quote!(self.graph().get_edge_property(self.edge())))
+    } else {
+        PropertyFetch::Scalar(quote!(self.graph().get_edge_property_one(self.edge())))
+    };
+    let body = property_accessor_body(&fetch, &binding, is_multi);
+    let trait_name = edge_property_trait_name(variant);
+
     Ok(quote! {
         #deprecated
-        #vis fn property(
-            #self_param
-        ) -> ::core::result::Result<::core::option::Option<#elem_ty>, ::flatpg::error::Error> {
-            // Inherent method, so `graph`/`edge` have no supertrait to come from: import the
-            // trait anonymously rather than rely on the caller's scope.
-            use ::flatpg::edge::StoredEdge as _;
-
-            self.graph()
-                .get_edge_property(self.edge())?
-                .map(|p| match p {
-                    #pattern => #expr,
-                    other => ::core::result::Result::Err(
-                        ::flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ()),
-                    ),
-                })
-                .transpose()
+        #vis trait #trait_name: ::flatpg::edge::StoredEdge<#schema_ty> {
+            fn property #generics (
+                #self_param
+            ) -> ::core::result::Result<#return_ty, ::flatpg::error::Error> {
+                #body
+            }
         }
+
+        // The deprecation belongs on the accessor's callers, not on declaring the edge kind:
+        // without this the schema author is warned at the point they merely name the kind.
+        #[allow(deprecated)]
+        impl<'a> #trait_name for #struct_name<'a> {}
     })
 }
 
@@ -93,7 +114,7 @@ fn expand_edge_structs(
     let structs = vars
         .iter()
         .map(|(v, struct_name, attrs)| {
-            let property_method = build_edge_property_method(attrs, schema_ty, vis)?;
+            let property_trait = build_edge_property_trait(v, struct_name, attrs, schema_ty, vis)?;
             Ok(quote! {
                 #vis struct #struct_name<'a> {
                     graph: &'a ::flatpg::graph::Graph<#schema_ty>,
@@ -119,8 +140,6 @@ fn expand_edge_structs(
                             seq,
                         }
                     }
-
-                    #property_method
                 }
 
                 impl<'a> ::flatpg::edge::StoredEdge<#schema_ty> for #struct_name<'a> {
@@ -149,6 +168,8 @@ fn expand_edge_structs(
                         #name::#v
                     }
                 }
+
+                #property_trait
             })
         })
         .collect::<Result<Vec<_>, Error>>()?;
@@ -177,7 +198,7 @@ pub fn edge_structs_derive(
                  ..
              }| {
                 let attr = find_attribute(PROPERTY_ATTR, attrs)
-                    .ok_or_else(|| absent_attribute_error(variant, false))?;
+                    .ok_or_else(|| absent_attribute_error(variant, QuantitySupport::Optional))?;
                 let parsed = parse_property_attr(attr, variant)?;
                 Ok((variant, edge_struct_name(variant), parsed))
             },
@@ -284,9 +305,18 @@ pub fn edge_structs_derive(
 mod tests {
     use super::*;
     use crate::common::test_support::{
-        find_impl, find_method, match_arm_count, parse_enum, parse_output, return_type_string,
+        find_impl, find_method, find_trait, find_trait_method, match_arm_count, parse_enum,
+        parse_output, return_type_string,
     };
     use syn::File;
+
+    /// The `property` method of one edge kind's generated trait.
+    fn trait_property<'a>(file: &'a File, trait_name: &str) -> &'a syn::TraitItemFn {
+        let property_trait =
+            find_trait(file, trait_name).unwrap_or_else(|| panic!("{trait_name} not found"));
+        find_trait_method(property_trait, "property")
+            .unwrap_or_else(|| panic!("{trait_name}::property not found"))
+    }
 
     fn find_inherent_impl<'a>(file: &'a File, self_type: &str) -> Option<&'a syn::ItemImpl> {
         file.items.iter().find_map(|item| {
@@ -380,25 +410,23 @@ mod tests {
     }
 
     #[test]
-    fn edge_structs_derive_pub_enum_property_method_is_pub() {
+    fn edge_structs_derive_pub_enum_property_trait_is_pub() {
         let input = parse_enum(r#"pub enum E { #[property(typ = String)] Labeled }"#);
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
-        let inherent = find_inherent_impl(&file, "LabeledEdge")
-            .expect("inherent impl for LabeledEdge not found");
-        let method = find_method(inherent, "property").expect("property method not found");
-        assert_vis_matches(&method.vis, true, "fn LabeledEdge::property");
+        let property_trait =
+            find_trait(&file, "LabeledEdgeProperty").expect("LabeledEdgeProperty not found");
+        assert_vis_matches(&property_trait.vis, true, "trait LabeledEdgeProperty");
     }
 
     #[test]
-    fn edge_structs_derive_private_enum_property_method_is_not_pub() {
+    fn edge_structs_derive_private_enum_property_trait_is_not_pub() {
         let input = parse_enum(r#"enum E { #[property(typ = String)] Labeled }"#);
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
-        let inherent = find_inherent_impl(&file, "LabeledEdge")
-            .expect("inherent impl for LabeledEdge not found");
-        let method = find_method(inherent, "property").expect("property method not found");
-        assert_vis_matches(&method.vis, false, "fn LabeledEdge::property");
+        let property_trait =
+            find_trait(&file, "LabeledEdgeProperty").expect("LabeledEdgeProperty not found");
+        assert_vis_matches(&property_trait.vis, false, "trait LabeledEdgeProperty");
     }
 
     #[test]
@@ -503,9 +531,11 @@ mod tests {
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
 
-        let inherent = find_inherent_impl(&file, "LabeledEdge")
-            .expect("inherent impl for LabeledEdge not found");
-        assert!(find_method(inherent, "property").is_some());
+        let property_trait =
+            find_trait(&file, "LabeledEdgeProperty").expect("LabeledEdgeProperty not found");
+        assert!(find_trait_method(property_trait, "property").is_some());
+        // The struct picks the accessor up by implementing its kind's trait.
+        assert!(find_impl(&file, "LabeledEdgeProperty", "LabeledEdge").is_some());
     }
 
     #[test]
@@ -519,9 +549,8 @@ mod tests {
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
 
-        let inherent =
-            find_inherent_impl(&file, "PlainEdge").expect("inherent impl for PlainEdge not found");
-        assert!(find_method(inherent, "property").is_none());
+        assert!(find_trait(&file, "PlainEdgeProperty").is_none());
+        assert!(find_impl(&file, "PlainEdgeProperty", "PlainEdge").is_none());
     }
 
     #[test]
@@ -536,26 +565,17 @@ mod tests {
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
 
-        let labeled = find_method(
-            find_inherent_impl(&file, "LabeledEdge").unwrap(),
-            "property",
-        )
-        .unwrap();
+        let labeled = trait_property(&file, "LabeledEdgeProperty");
         let labeled_ret = return_type_string(&labeled.sig);
         assert!(labeled_ret.contains("& str"));
         assert!(!labeled_ret.contains("String"));
 
-        let weighted = find_method(
-            find_inherent_impl(&file, "WeightedEdge").unwrap(),
-            "property",
-        )
-        .unwrap();
+        let weighted = trait_property(&file, "WeightedEdgeProperty");
         let weighted_ret = return_type_string(&weighted.sig);
         assert!(weighted_ret.contains("i32"));
         assert!(!weighted_ret.contains('&'));
 
-        let linked =
-            find_method(find_inherent_impl(&file, "LinkedEdge").unwrap(), "property").unwrap();
+        let linked = trait_property(&file, "LinkedEdgeProperty");
         let linked_ret = return_type_string(&linked.sig);
         assert!(linked_ret.contains("NodeId"));
         assert!(linked_ret.contains("MySchema"));
@@ -567,8 +587,7 @@ mod tests {
         let config = edge_kind_config("MySchema");
         let file = parse_output(edge_structs_derive(&input, &config).unwrap());
 
-        let tagged =
-            find_method(find_inherent_impl(&file, "TaggedEdge").unwrap(), "property").unwrap();
+        let tagged = trait_property(&file, "TaggedEdgeProperty");
         let tagged_ret = return_type_string(&tagged.sig);
         assert!(tagged_ret.contains("Status"));
     }

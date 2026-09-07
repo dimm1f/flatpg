@@ -160,10 +160,7 @@ fn main() {
         panic!("expected exactly one Edge::Extended");
     };
     assert_eq!(extended.src_node().kind(), SimpleNode::Gamma);
-    let edge_property = extended
-        .property()
-        .expect("edge property lookup")
-        .expect("Extended edges carry a property");
+    let edge_property = extended.property().expect("edge property lookup");
     assert_eq!(edge_property, "refers-to");
 
     assert_eq!(SimpleProperty::Tag.as_str(), "Label");

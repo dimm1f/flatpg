@@ -3,10 +3,10 @@ use crate::{
     error::Error,
     graph::Graph,
     node::{NodeId, RawNodeId},
-    property::PropertyType,
     schema::Schema,
     storage::{
-        EdgeStorageSlot, NodeMetaStorage, Offset, OffsetStorage, StorageArray, ranged_slice,
+        EdgeSeq, EdgeStorageSlot, NodeMetaStorage, Offset, OffsetStorage, StorageArray,
+        ranged_slice,
     },
 };
 
@@ -32,16 +32,29 @@ pub(super) struct PropertySlotAppend {
 pub(super) struct EdgeSlotReplace {
     pub(super) slot_index: usize,
     pub(super) neighbors: Vec<RawNodeId>,
-    pub(super) values: StorageArray,
+    pub(super) edges: Vec<EdgeSeq>,
     pub(super) offsets: Vec<Offset>,
 }
 
 pub(super) struct EdgeSlotInsert {
     pub(super) slot_index: usize,
     pub(super) neighbors: Vec<RawNodeId>,
-    pub(super) values: StorageArray,
+    pub(super) edges: Vec<EdgeSeq>,
     pub(super) batches: Vec<(usize, usize)>,
     pub(super) offsets: Vec<Offset>,
+}
+
+// One edge kind's property store append for the diff's new edges, in `EdgeSeq` order.
+// Commit replays `try_append`/`extend` and bumps `count`; the batch was built from this
+// very store's declared type, so neither can fail.
+pub(super) struct EdgePropertyAppend {
+    pub(super) edge_kind_index: usize,
+    pub(super) values_batch: StorageArray,
+    /// Empty for `One`-quantity kinds, where an `EdgeSeq` indexes `values` directly. For
+    /// `Multi` this carries one offset per new edge, plus the leading zero when the store's
+    /// offsets array is still empty.
+    pub(super) offsets_tail: Vec<Offset>,
+    pub(super) count_delta: usize,
 }
 
 /// A validated set of changes, bound to the graph it was prepared against.
@@ -66,6 +79,7 @@ pub(super) struct StagedParts<S: Schema> {
     pub(super) property_replacements: Vec<PropertySlotReplace>,
     pub(super) edge_replacements: Vec<EdgeSlotReplace>,
     pub(super) property_appends: Vec<PropertySlotAppend>,
+    pub(super) edge_property_appends: Vec<EdgePropertyAppend>,
     pub(super) edge_inserts: Vec<EdgeSlotInsert>,
 }
 
@@ -78,6 +92,7 @@ impl<S: Schema> Default for StagedParts<S> {
             property_replacements: Vec::new(),
             edge_replacements: Vec::new(),
             property_appends: Vec::new(),
+            edge_property_appends: Vec::new(),
             edge_inserts: Vec::new(),
         }
     }
@@ -111,6 +126,7 @@ impl<S: Schema> StagedDiff<'_, S> {
             property_replacements,
             edge_replacements,
             property_appends,
+            edge_property_appends,
             edge_inserts,
         } = std::mem::take(&mut self.parts);
         let graph = &mut *self.graph;
@@ -130,7 +146,7 @@ impl<S: Schema> StagedDiff<'_, S> {
         for replace in edge_replacements {
             let slot = &mut graph.edge_storage[replace.slot_index];
             *slot.neighbors_mut() = replace.neighbors;
-            *slot.values_mut() = replace.values;
+            *slot.edges_mut() = replace.edges;
             *slot.offsets_mut() = replace.offsets;
         }
 
@@ -154,6 +170,20 @@ impl<S: Schema> StagedDiff<'_, S> {
             slot.offsets_mut().extend(append.offsets_tail);
         }
 
+        for append in edge_property_appends {
+            let store = &mut graph.edge_property_storage[append.edge_kind_index];
+            let mut values_batch = append.values_batch;
+            // Panic: as for the node property appends above — `try_append` only rejects a batch
+            // whose type differs from the store's, and `prepare` built this batch from this very
+            // store's `typ()` while holding the graph exclusively.
+            store
+                .values_mut()
+                .try_append(&mut values_batch)
+                .expect("staged edge property batch carries its kind's type");
+            store.offsets_mut().extend(append.offsets_tail);
+            store.set_count(store.count() + append.count_delta);
+        }
+
         for insert in edge_inserts {
             let slot = &mut graph.edge_storage[insert.slot_index];
             if !insert.batches.is_empty() {
@@ -163,7 +193,7 @@ impl<S: Schema> StagedDiff<'_, S> {
                 // `Graph::new` starts empty, `TryFrom<RawGraph<S>>` runs `check_integrity`, and
                 // this method is the only other writer — and `prepare` derived these positions
                 // from the offsets left by the edge replacements applied above.
-                merge_edge_batches(slot, &insert.batches, insert.neighbors, insert.values)
+                merge_edge_batches(slot, &insert.batches, insert.neighbors, insert.edges)
                     .expect("staged edge batches fit the slot they were measured against");
             }
             *slot.offsets_mut() = insert.offsets;
@@ -181,25 +211,31 @@ fn merge_edge_batches(
     slot: &mut EdgeStorageSlot,
     batches: &[(usize, usize)],
     batch_neighbors: Vec<RawNodeId>,
-    batch_values: StorageArray,
+    batch_edges: Vec<EdgeSeq>,
 ) -> Result<(), Error> {
     let inserted = batch_neighbors.len();
 
     let old_neighbors = std::mem::take(slot.neighbors_mut());
-    let values_typ = slot.values().typ();
-    let has_values = values_typ != PropertyType::None;
-    let old_values = std::mem::take(slot.values_mut());
+    let old_edges = std::mem::take(slot.edges_mut());
+    // An edge kind typed `PropertyType::None` allocates no `EdgeSeq`, so both sides stay
+    // empty and there is no second array to merge — the same "empty means unused" rule the
+    // offsets arrays follow.
+    let has_edges = !old_edges.is_empty() || !batch_edges.is_empty();
 
     if old_neighbors.is_empty() {
         *slot.neighbors_mut() = batch_neighbors;
-        if has_values {
-            *slot.values_mut() = batch_values;
+        if has_edges {
+            *slot.edges_mut() = batch_edges;
         }
         return Ok(());
     }
 
     let mut neighbors = Vec::with_capacity(old_neighbors.len() + inserted);
-    let mut values = StorageArray::with_capacity(values_typ, old_neighbors.len() + inserted);
+    let mut edges = Vec::with_capacity(if has_edges {
+        old_neighbors.len() + inserted
+    } else {
+        0
+    });
 
     let mut copied = 0usize;
     let mut taken = 0usize;
@@ -210,23 +246,23 @@ fn merge_edge_batches(
             .ok_or_else(Error::offset_underflow)?;
         if take > 0 {
             neighbors.extend_from_slice(ranged_slice(&old_neighbors, copied..copied + take)?);
-            if has_values {
-                values.try_extend_from_range(&old_values, copied..copied + take)?;
+            if has_edges {
+                edges.extend_from_slice(ranged_slice(&old_edges, copied..copied + take)?);
             }
             copied += take;
         }
 
         neighbors.extend_from_slice(ranged_slice(&batch_neighbors, taken..taken + count)?);
-        if has_values {
-            values.try_extend_from_range(&batch_values, taken..taken + count)?;
+        if has_edges {
+            edges.extend_from_slice(ranged_slice(&batch_edges, taken..taken + count)?);
         }
         taken += count;
     }
 
     neighbors.extend_from_slice(ranged_slice(&old_neighbors, copied..old_neighbors.len())?);
-    if has_values {
-        values.try_extend_from_range(&old_values, copied..old_neighbors.len())?;
-        *slot.values_mut() = values;
+    if has_edges {
+        edges.extend_from_slice(ranged_slice(&old_edges, copied..old_neighbors.len())?);
+        *slot.edges_mut() = edges;
     }
     *slot.neighbors_mut() = neighbors;
     Ok(())

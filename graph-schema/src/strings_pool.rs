@@ -63,12 +63,6 @@ fn insert_slot(tags: &mut [u8], slots: &mut [u32], hash: u32, id: u32) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RawStringId(u32);
 
-impl RawStringId {
-    pub(crate) fn index(&self) -> u32 {
-        self.0
-    }
-}
-
 impl fmt::Display for RawStringId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "RawStringId({})", self.0)

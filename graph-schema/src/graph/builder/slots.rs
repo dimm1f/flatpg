@@ -1,16 +1,23 @@
+use std::marker::PhantomData;
+
 use crate::{
-    ItemIndex,
+    ItemAsStr, ItemIndex,
     error::Error,
     node::RawNodeId,
-    property::{PropertyType, PropertyValue},
-    schema::Schema,
-    storage::{EdgeStorage, Offset, OffsetStorage, PropertyStorage, StorageArray, StoredProperty},
+    property::{PropertyType, PropertyValue, QuantityType},
+    schema::{EdgeKind, Schema},
+    storage::{
+        EdgePropertyStorage, EdgeSeq, EdgeStorage, Offset, OffsetStorage, PropertyStorage,
+        StorageArray,
+    },
     strings_pool::StringsPool,
 };
 
 use super::QuantifiedProperty;
 use super::convert::to_stored_property;
-use super::staged::{EdgeSlotInsert, EdgeSlotReplace, PropertySlotAppend, PropertySlotReplace};
+use super::staged::{
+    EdgePropertyAppend, EdgeSlotInsert, EdgeSlotReplace, PropertySlotAppend, PropertySlotReplace,
+};
 
 pub(super) struct SlotBuckets<T>(Vec<Option<Vec<T>>>);
 
@@ -37,7 +44,7 @@ impl<T: Default> SlotBuckets<T> {
 pub(super) struct SlotHalfEdge {
     pub(super) seq: usize,
     pub(super) neighbor: RawNodeId,
-    pub(super) property: Option<StoredProperty>,
+    pub(super) edge_seq: Option<EdgeSeq>,
 }
 
 struct SlotHalfEdges {
@@ -63,6 +70,123 @@ impl EdgeHalfBuckets {
 
     fn take(&mut self, slot_index: usize) -> Option<SlotHalfEdges> {
         self.0[slot_index].take()
+    }
+}
+
+struct EdgeKindBatch {
+    /// The next `EdgeSeq` to hand out, starting from the store's current `count`.
+    next_seq: usize,
+    values: StorageArray,
+    /// Empty unless the kind is `Multi`; see [`EdgePropertyAppend::offsets_tail`].
+    offsets_tail: Vec<Offset>,
+    cumulative: Offset,
+    count_delta: usize,
+}
+
+/// Accumulates the diff's new edge property values, one batch per edge kind, in `EdgeSeq`
+/// order.
+///
+/// An `EdgeSeq` is handed out only once its edge is certain to be stored, so an edge dropped
+/// for an invalid endpoint leaves no unreachable gap in the store.
+pub(super) struct EdgePropertyBatches<S: Schema> {
+    batches: Vec<Option<EdgeKindBatch>>,
+    _phantom: PhantomData<fn() -> S>,
+}
+
+impl<S: Schema> EdgePropertyBatches<S> {
+    pub(super) fn new() -> Self {
+        Self {
+            batches: (0..S::number_of_edge_kinds()).map(|_| None).collect(),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Reserves one edge's identity and appends its values, returning the `EdgeSeq` both of
+    /// its halves will carry — `None` for a kind that carries no property.
+    pub(super) fn push(
+        &mut self,
+        storage: &EdgePropertyStorage<S>,
+        edge_kind: EdgeKind<S>,
+        property: Option<&QuantifiedProperty>,
+        strings: &mut StringsPool,
+    ) -> Result<Option<EdgeSeq>, Error> {
+        let property_type = S::edge_property_type(edge_kind);
+        let kind_index = edge_kind.index();
+
+        if property_type == PropertyType::None {
+            // This kind stores nothing, so a supplied value would be silently dropped rather
+            // than stored.
+            if let Some(property) = property {
+                let found = property
+                    .as_slice()
+                    .first()
+                    .map(PropertyValue::typ)
+                    .unwrap_or(PropertyType::None);
+                return Err(Error::invalid_property_type(PropertyType::None, found));
+            }
+            return Ok(None);
+        }
+
+        let values = property.map(QuantifiedProperty::as_slice).unwrap_or(&[]);
+        let is_multi = S::edge_property_quantity(edge_kind) == QuantityType::Multi;
+        if !is_multi {
+            // `Multi` is free to carry an empty run — that is what a CSR range of length zero
+            // says — but `One` needs exactly one value: none would leave the store shorter
+            // than the edges indexing it, and several would silently drop all but the first.
+            match values.len() {
+                1 => {}
+                0 => {
+                    return Err(Error::invalid_property_type(
+                        property_type,
+                        PropertyType::None,
+                    ));
+                }
+                _ => return Err(Error::property_already_set(edge_kind.as_str())),
+            }
+        }
+
+        let store = &storage[kind_index];
+        let batch = self.batches[kind_index].get_or_insert_with(|| EdgeKindBatch {
+            next_seq: store.count(),
+            values: StorageArray::new(property_type),
+            // A `Multi` store that has never been written needs its leading zero; one that
+            // has been written already carries it.
+            offsets_tail: match (is_multi, store.offsets().is_empty()) {
+                (true, true) => vec![Offset::zero()],
+                _ => Vec::new(),
+            },
+            cumulative: store.offsets().last().copied().unwrap_or_else(Offset::zero),
+            count_delta: 0,
+        });
+
+        let edge_seq = EdgeSeq::new(batch.next_seq)?;
+        batch.next_seq += 1;
+        batch.count_delta += 1;
+
+        for value in values {
+            batch.values.try_push(&to_stored_property(value, strings))?;
+        }
+        if is_multi {
+            batch.cumulative = batch.cumulative.checked_add_delta(values.len())?;
+            batch.offsets_tail.push(batch.cumulative);
+        }
+
+        Ok(Some(edge_seq))
+    }
+
+    pub(super) fn into_appends(self) -> Vec<EdgePropertyAppend> {
+        self.batches
+            .into_iter()
+            .enumerate()
+            .filter_map(|(edge_kind_index, batch)| {
+                batch.map(|batch| EdgePropertyAppend {
+                    edge_kind_index,
+                    values_batch: batch.values,
+                    offsets_tail: batch.offsets_tail,
+                    count_delta: batch.count_delta,
+                })
+            })
+            .collect()
     }
 }
 
@@ -113,11 +237,12 @@ pub(super) fn prepare_property_updates<S: Schema>(
             let orig_end = slot.offsets()[end];
 
             cumulative = if let Some(quantified_property) = seq_updates[start] {
-                let new_node_values: &[PropertyValue] = match quantified_property {
-                    QuantifiedProperty::One(p) => std::slice::from_ref(p),
-                    QuantifiedProperty::Multi(ps) => ps.as_slice(),
-                };
-                append_property_batch(&mut new_values, cumulative, new_node_values, strings)?
+                append_property_batch(
+                    &mut new_values,
+                    cumulative,
+                    quantified_property.as_slice(),
+                    strings,
+                )?
             } else {
                 for prop in slot
                     .values()
@@ -177,22 +302,20 @@ pub(super) fn prepare_edge_removals<S: Schema>(
         }
         absolute_removals.sort_unstable();
 
-        let property_type = slot.values().typ();
+        let kept = slot.neighbors().len() - absolute_removals.len();
         let mut removal_iter = absolute_removals.iter().copied().peekable();
-        let mut new_neighbors =
-            Vec::with_capacity(slot.neighbors().len() - absolute_removals.len());
-        let mut new_values = StorageArray::with_capacity(
-            property_type,
-            slot.values().len().saturating_sub(absolute_removals.len()),
-        );
+        let mut new_neighbors = Vec::with_capacity(kept);
+        // Empty for edge kinds carrying no property, which hold no `EdgeSeq`; `get` below
+        // then yields nothing and leaves it that way.
+        let mut new_edges = Vec::with_capacity(if slot.edges().is_empty() { 0 } else { kept });
         for (i, &neighbor) in slot.neighbors().iter().enumerate() {
             if removal_iter.peek() == Some(&i) {
                 removal_iter.next();
                 continue;
             }
             new_neighbors.push(neighbor);
-            if let Some(v) = slot.values().get(i) {
-                new_values.try_push(&v)?;
+            if let Some(&edge_seq) = slot.edges().get(i) {
+                new_edges.push(edge_seq);
             }
         }
 
@@ -210,7 +333,7 @@ pub(super) fn prepare_edge_removals<S: Schema>(
         replacements.push(EdgeSlotReplace {
             slot_index,
             neighbors: new_neighbors,
-            values: new_values,
+            edges: new_edges,
             offsets: new_offsets,
         });
     }
@@ -321,7 +444,7 @@ pub(super) fn prepare_new_edges<S: Schema>(
             inserts.push(EdgeSlotInsert {
                 slot_index,
                 neighbors: Vec::new(),
-                values: StorageArray::with_capacity(slot.values().typ(), 0),
+                edges: Vec::new(),
                 batches: Vec::new(),
                 offsets,
             });
@@ -329,8 +452,9 @@ pub(super) fn prepare_new_edges<S: Schema>(
         };
 
         let SlotHalfEdges { halves, mut counts } = seq_halves;
-        let property_type = slot.values().typ();
-        let has_values = property_type != PropertyType::None;
+        // Schema-derived rather than read off the halves: it is the same fact `prepare` used
+        // when it decided whether to hand this kind's edges an `EdgeSeq` at all.
+        let has_edges = S::edge_property_type(edge_kind) != PropertyType::None;
         debug_assert_eq!(counts.len(), offsets.len() - 1);
 
         // Guards every `as u32` below: the histogram and its prefix sums are all bounded
@@ -356,27 +480,18 @@ pub(super) fn prepare_new_edges<S: Schema>(
         }
 
         let mut neighbors: Vec<RawNodeId> = Vec::with_capacity(halves.len());
-        let mut values = StorageArray::with_capacity(property_type, halves.len());
+        let mut edges: Vec<EdgeSeq> = Vec::with_capacity(if has_edges { halves.len() } else { 0 });
         for &i in &order {
             let half = &halves[i as usize];
             neighbors.push(half.neighbor);
-            match (&half.property, has_values) {
-                (Some(prop), true) => values.try_push(prop)?,
-                // A half with no property must not be skipped: it counts as a neighbor
-                // either way, so skipping would leave `values` shorter than `neighbors`
-                // and shift every later edge's property onto the wrong edge.
-                (None, true) => {
-                    return Err(Error::invalid_property_type(
-                        property_type,
-                        PropertyType::None,
-                    ));
-                }
-                // The mirror: this slot stores nothing, so a supplied property would be
-                // silently dropped rather than stored.
-                (Some(prop), false) => {
-                    return Err(Error::invalid_property_type(PropertyType::None, prop.typ()));
-                }
-                (None, false) => {}
+            // A half without an `EdgeSeq` must not be skipped on a kind that has them: it
+            // counts as a neighbor either way, so skipping would leave `edges` shorter than
+            // `neighbors` and shift every later edge's identity onto the wrong edge.
+            // `EdgePropertyBatches::push` already rejected the mismatched cases, so this only
+            // records what it decided.
+            debug_assert_eq!(half.edge_seq.is_some(), has_edges);
+            if let Some(edge_seq) = half.edge_seq {
+                edges.push(edge_seq);
             }
         }
 
@@ -396,7 +511,7 @@ pub(super) fn prepare_new_edges<S: Schema>(
         inserts.push(EdgeSlotInsert {
             slot_index,
             neighbors,
-            values,
+            edges,
             batches,
             offsets,
         });

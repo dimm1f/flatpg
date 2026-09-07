@@ -12,7 +12,7 @@ use crate::{
         integrity::{CheckIntegrity, check_integrity},
     },
     schema::Schema,
-    storage::{EdgeStorage, NodeMetaStorage, PropertyStorage},
+    storage::{EdgePropertyStorage, EdgeStorage, NodeMetaStorage, PropertyStorage},
     strings_pool::StringsPool,
 };
 
@@ -20,6 +20,7 @@ pub struct RawGraph<S> {
     pub node_meta_storage: NodeMetaStorage<S>,
     pub edge_storage: EdgeStorage<S>,
     pub property_storage: PropertyStorage<S>,
+    pub edge_property_storage: EdgePropertyStorage<S>,
     pub strings: StringsPool,
 }
 
@@ -29,6 +30,7 @@ impl<S: Schema> RawGraph<S> {
             node_meta_storage: NodeMetaStorage::new(),
             edge_storage: EdgeStorage::new(),
             property_storage: PropertyStorage::new(),
+            edge_property_storage: EdgePropertyStorage::new(),
             strings: StringsPool::new(),
         }
     }
@@ -46,6 +48,7 @@ impl<S: Schema> From<Graph<S>> for RawGraph<S> {
             node_meta_storage: graph.node_meta_storage,
             edge_storage: graph.edge_storage,
             property_storage: graph.property_storage,
+            edge_property_storage: graph.edge_property_storage,
             strings: graph.strings,
         }
     }
@@ -57,6 +60,7 @@ impl<S: Schema> CheckIntegrity<S> for RawGraph<S> {
             &self.node_meta_storage,
             &self.edge_storage,
             &self.property_storage,
+            &self.edge_property_storage,
             &self.strings,
         )
     }
@@ -70,12 +74,14 @@ impl<S: Schema> TryFrom<RawGraph<S>> for Graph<S> {
             &raw.node_meta_storage,
             &raw.edge_storage,
             &raw.property_storage,
+            &raw.edge_property_storage,
             &raw.strings,
         )?;
         Ok(Graph {
             node_meta_storage: raw.node_meta_storage,
             edge_storage: raw.edge_storage,
             property_storage: raw.property_storage,
+            edge_property_storage: raw.edge_property_storage,
             strings: raw.strings,
         })
     }

@@ -1,9 +1,11 @@
 use std::{
+    fmt::Display,
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
 use crate::{
+    ItemIndex,
     enum_property::RawEnumId,
     error::Error,
     node::{NodeMeta, RawNodeId},
@@ -49,57 +51,32 @@ impl StoredProperty {
     }
 }
 
-/// The bit that flips to turn a two's-complement signed value into an order-preserving unsigned
-/// one, and the top bit of the float transform.
-const SIGN_FLIP_64: u64 = 1 << 63;
-const SIGN_FLIP_32: u32 = 1 << 31;
+/// A dense index identifying one edge within its edge kind.
+///
+/// Both half-edges of an edge carry the same `EdgeSeq`, so an edge's property is stored once
+/// in that kind's [`EdgePropertyStore`] and the two halves cannot disagree about it. Edge kinds
+/// declared `PropertyType::None` allocate none: there is nothing to share, and their identity
+/// is recoverable from the edge's endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EdgeSeq(u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub(crate) struct ValueKey(u64);
+impl EdgeSeq {
+    pub fn new(value: usize) -> Result<Self, Error> {
+        u32::try_from(value)
+            .map(Self)
+            .map_err(|_| Error::edge_count_overflow(value))
+    }
 
-impl ValueKey {
-    pub(crate) fn of(values: &StorageArray, index: usize) -> Self {
-        let key = match values {
-            StorageArray::Bool(v) => v.get(index).map(|&b| b as u64),
-            StorageArray::Byte(v) => v.get(index).map(|&b| b as u64),
-            StorageArray::Short(v) => v.get(index).map(|&n| signed_key(n as i64)),
-            StorageArray::Int(v) => v.get(index).map(|&n| signed_key(n as i64)),
-            StorageArray::Long(v) => v.get(index).map(|&n| signed_key(n)),
-            StorageArray::Float(v) => v.get(index).map(|&f| float32_key(f)),
-            StorageArray::Double(v) => v.get(index).map(|&f| float64_key(f)),
-            StorageArray::NodeId(v) => v
-                .get(index)
-                .map(|n| (n.kind() as u64) << 32 | n.seq() as u64),
-            // Sound because a graph has exactly one `StringsPool` and interning deduplicates,
-            // so equal text always carries the same id. Per-shard or merged pools would break
-            // this and would need the text compared instead.
-            StorageArray::StringId(v) => v.get(index).map(|s| s.index() as u64),
-            StorageArray::Enum(v) => v
-                .get(index)
-                .map(|e| (e.enum_property_index() as u64) << 16 | e.variant() as u64),
-            StorageArray::None => None,
-        };
-        Self(key.unwrap_or(0))
+    #[inline]
+    pub fn index(&self) -> usize {
+        self.0 as usize
     }
 }
 
-fn signed_key(value: i64) -> u64 {
-    (value as u64) ^ SIGN_FLIP_64
-}
-
-/// Maps IEEE-754 bits onto an order-preserving integer, matching `f64::total_cmp`.
-///
-/// A positive float keeps its bit order and moves above the midpoint; a negative one is
-/// inverted, which both reverses its bit order (more negative means larger raw bits) and moves
-/// it below. The transform must run at the float's own width, so `f32` and `f64` differ.
-fn float64_key(value: f64) -> u64 {
-    let bits = value.to_bits();
-    bits ^ ((((bits as i64) >> 63) as u64) | SIGN_FLIP_64)
-}
-
-fn float32_key(value: f32) -> u64 {
-    let bits = value.to_bits();
-    (bits ^ ((((bits as i32) >> 31) as u32) | SIGN_FLIP_32)) as u64
+impl Display for EdgeSeq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EdgeSeq({})", self.0)
+    }
 }
 
 type InnerOffset = u32;
@@ -291,32 +268,6 @@ impl StorageArray {
             (StorageArray::Enum(storage), StorageArray::Enum(v)) => storage.append(v),
             (StorageArray::None, StorageArray::None) => (),
             _ => return Err(Error::invalid_property_type(target_typ, other_typ)),
-        }
-        Ok(())
-    }
-
-    pub(crate) fn try_extend_from_range(
-        &mut self,
-        src: &StorageArray,
-        range: std::ops::Range<usize>,
-    ) -> Result<(), Error> {
-        let target_typ = self.typ();
-        let src_typ = src.typ();
-        match (self, src) {
-            (Self::Bool(dst), Self::Bool(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::Byte(dst), Self::Byte(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::Short(dst), Self::Short(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::Int(dst), Self::Int(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::Long(dst), Self::Long(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::Float(dst), Self::Float(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::Double(dst), Self::Double(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::NodeId(dst), Self::NodeId(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::StringId(dst), Self::StringId(v)) => {
-                dst.extend_from_slice(ranged_slice(v, range)?)
-            }
-            (Self::Enum(dst), Self::Enum(v)) => dst.extend_from_slice(ranged_slice(v, range)?),
-            (Self::None, Self::None) => (),
-            _ => return Err(Error::invalid_property_type(target_typ, src_typ)),
         }
         Ok(())
     }
@@ -734,7 +685,9 @@ pub trait OffsetStorage {
 pub struct EdgeStorageSlot {
     offsets: Vec<Offset>,
     neighbors: Vec<RawNodeId>,
-    values: StorageArray,
+    /// The [`EdgeSeq`] of each half-edge, parallel to `neighbors`. Empty for edge kinds
+    /// declared [`PropertyType::None`], which allocate no `EdgeSeq` at all.
+    edges: Vec<EdgeSeq>,
 }
 
 impl EdgeStorageSlot {
@@ -758,16 +711,18 @@ impl EdgeStorageSlot {
         &mut self.neighbors
     }
 
-    pub fn get_value(&self, index: Offset) -> Option<StoredProperty> {
-        self.values.get(index.value())
+    /// Returns the [`EdgeSeq`] at an absolute position in this slot's half-edge arrays, or
+    /// `None` when the slot's edge kind carries no property and so allocates no `EdgeSeq`.
+    pub fn get_edge_seq(&self, index: Offset) -> Option<EdgeSeq> {
+        self.edges.get(index.value()).copied()
     }
 
-    pub fn values(&self) -> &StorageArray {
-        &self.values
+    pub fn edges(&self) -> &Vec<EdgeSeq> {
+        &self.edges
     }
 
-    pub fn values_mut(&mut self) -> &mut StorageArray {
-        &mut self.values
+    pub fn edges_mut(&mut self) -> &mut Vec<EdgeSeq> {
+        &mut self.edges
     }
 }
 
@@ -787,16 +742,11 @@ pub struct EdgeStorage<S> {
 
 impl<S: Schema> EdgeStorage<S> {
     pub fn new() -> Self {
-        let mut storage = vec![EdgeStorageSlot::default(); S::edge_storage_size()];
-
-        for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
-            let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind);
-            let slot = &mut storage[slot_index.index()];
-
-            slot.values = StorageArray::new(S::edge_property_type(edge_kind));
-        }
+        // Unlike `PropertyStorage`, nothing here is typed by the schema: a slot holds only
+        // adjacency and `EdgeSeq`s now, and the values they point at live in
+        // `EdgePropertyStorage`, which is where the schema's declared type is applied.
         Self {
-            storage,
+            storage: vec![EdgeStorageSlot::default(); S::edge_storage_size()],
             _phantom: PhantomData,
         }
     }
@@ -914,6 +864,136 @@ impl<'a, S> IntoIterator for &'a PropertyStorage<S> {
     }
 }
 
+/// One edge kind's property column, indexed by [`EdgeSeq`].
+///
+/// `offsets` is empty for `QuantityType::One`, where an `EdgeSeq` indexes `values` directly;
+/// `Multi` carries the usual `count + 1` CSR array. Edge kinds declared
+/// [`PropertyType::None`] keep everything empty — they allocate no `EdgeSeq`, so `count`
+/// stays zero too.
+#[derive(Default, Clone)]
+pub struct EdgePropertyStore {
+    offsets: Vec<Offset>,
+    values: StorageArray,
+    /// How many `EdgeSeq`s have been handed out, live or dead. `values.len()` cannot stand in
+    /// for this under `Multi`, where it counts values rather than edges.
+    count: usize,
+}
+
+impl EdgePropertyStore {
+    /// Returns the single value at `seq`, for a `One`-quantity kind.
+    ///
+    /// Reads the value directly instead of building the iterator [`EdgePropertyStore::get`]
+    /// has to hand back for a `Multi` run — that construction, not the extra indirection into
+    /// this store, is what dominates the cost of reading one scalar. Returns `None` for a
+    /// `Multi` kind, whose seq indexes `offsets` rather than `values`, and for a kind holding
+    /// no values at all.
+    pub fn get_one(&self, seq: EdgeSeq) -> Option<StoredProperty> {
+        if !self.offsets.is_empty() {
+            return None;
+        }
+        self.values.get(seq.index())
+    }
+
+    /// Returns the values attached to `seq`.
+    ///
+    /// Kinds typed [`PropertyType::None`] never reach here — they hold no `EdgeSeq` to pass in
+    /// — but a `StorageArray::None` would yield an empty iterator anyway.
+    pub fn get(&self, seq: EdgeSeq) -> Result<StorageArrayIter<'_>, Error> {
+        if self.offsets.is_empty() {
+            let index = seq.index();
+            if index >= self.values.len() {
+                return Err(Error::property_index_out_of_bounds(
+                    index,
+                    index + 1,
+                    self.values.len(),
+                ));
+            }
+            return Ok(self.values.iter_range(index..index + 1));
+        }
+
+        let (start, end) = self
+            .get_offset(seq.index())
+            .ok_or_else(Error::property_index_not_found)?;
+        end.checked_sub(start)?;
+        Ok(self.values.iter_range(start.value()..end.value()))
+    }
+
+    pub fn values(&self) -> &StorageArray {
+        &self.values
+    }
+
+    pub fn values_mut(&mut self) -> &mut StorageArray {
+        &mut self.values
+    }
+
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    pub fn set_count(&mut self, count: usize) {
+        self.count = count;
+    }
+}
+
+impl OffsetStorage for EdgePropertyStore {
+    fn offsets(&self) -> &Vec<Offset> {
+        &self.offsets
+    }
+
+    fn offsets_mut(&mut self) -> &mut Vec<Offset> {
+        &mut self.offsets
+    }
+}
+
+pub struct EdgePropertyStorage<S> {
+    storage: Vec<EdgePropertyStore>,
+    _phantom: PhantomData<fn() -> S>,
+}
+
+impl<S: Schema> EdgePropertyStorage<S> {
+    pub fn new() -> Self {
+        let mut storage = vec![EdgePropertyStore::default(); S::number_of_edge_kinds()];
+
+        for &edge_kind in S::edge_kinds() {
+            storage[edge_kind.index()].values = StorageArray::new(S::edge_property_type(edge_kind));
+        }
+        Self {
+            storage,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<S: Schema> Default for EdgePropertyStorage<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S> Deref for EdgePropertyStorage<S> {
+    type Target = Vec<EdgePropertyStore>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.storage
+    }
+}
+
+impl<S> DerefMut for EdgePropertyStorage<S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.storage
+    }
+}
+
+impl<'a, S> IntoIterator for &'a EdgePropertyStorage<S> {
+    type Item = &'a EdgePropertyStore;
+
+    type IntoIter = std::slice::Iter<'a, EdgePropertyStore>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.storage.iter()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::mem::discriminant;
@@ -935,102 +1015,6 @@ mod tests {
             StoredProperty::StringId(strings.intern("x")),
             StoredProperty::Enum(RawEnumId::new(0, 0)),
         ]
-    }
-
-    /// Builds a one-element array of `typ` holding `value`, and returns its key.
-    fn key_of(value: StoredProperty) -> ValueKey {
-        let mut arr = StorageArray::new(value.typ());
-        arr.try_push(&value).unwrap();
-        ValueKey::of(&arr, 0)
-    }
-
-    #[test]
-    fn value_key_orders_signed_integers_by_value() {
-        let keys: Vec<_> = [i32::MIN, -1, 0, 1, i32::MAX]
-            .into_iter()
-            .map(|n| key_of(StoredProperty::Int(n)))
-            .collect();
-        assert!(keys.windows(2).all(|w| w[0] < w[1]), "keys: {keys:?}");
-    }
-
-    #[test]
-    fn value_key_orders_floats_by_total_cmp() {
-        let keys: Vec<_> = [f64::NEG_INFINITY, -1.0, -0.0, 0.0, 1.0, f64::INFINITY]
-            .into_iter()
-            .map(|f| key_of(StoredProperty::Double(f)))
-            .collect();
-        assert!(keys.windows(2).all(|w| w[0] < w[1]), "keys: {keys:?}");
-    }
-
-    /// Pins the bitwise rule: the two zeros are distinguishable, so two half-edges storing
-    /// `0.0` and `-0.0` are reported as disagreeing rather than silently paired.
-    #[test]
-    fn value_key_separates_positive_and_negative_zero() {
-        assert_ne!(
-            key_of(StoredProperty::Double(0.0)),
-            key_of(StoredProperty::Double(-0.0))
-        );
-        assert_ne!(
-            key_of(StoredProperty::Float(0.0)),
-            key_of(StoredProperty::Float(-0.0))
-        );
-    }
-
-    #[test]
-    fn value_key_orders_f32_by_total_cmp() {
-        let keys: Vec<_> = [f32::NEG_INFINITY, -1.0, -0.0, 0.0, 1.0, f32::INFINITY]
-            .into_iter()
-            .map(|f| key_of(StoredProperty::Float(f)))
-            .collect();
-        assert!(keys.windows(2).all(|w| w[0] < w[1]), "keys: {keys:?}");
-    }
-
-    /// Distinct values of one type must key distinctly, or two half-edges that genuinely
-    /// disagree would pair up.
-    #[test]
-    fn value_key_separates_distinct_values_of_each_type() {
-        let mut strings = StringsPool::new();
-        let pairs: Vec<(StoredProperty, StoredProperty)> = vec![
-            (StoredProperty::Bool(true), StoredProperty::Bool(false)),
-            (StoredProperty::Byte(7), StoredProperty::Byte(8)),
-            (StoredProperty::Short(-7), StoredProperty::Short(7)),
-            (StoredProperty::Int(i32::MIN), StoredProperty::Int(i32::MAX)),
-            (
-                StoredProperty::Long(i64::MIN),
-                StoredProperty::Long(i64::MAX),
-            ),
-            (StoredProperty::Float(-1.5), StoredProperty::Float(1.5)),
-            (StoredProperty::Double(2.25), StoredProperty::Double(2.5)),
-            (
-                StoredProperty::NodeId(RawNodeId::new(2, 5)),
-                StoredProperty::NodeId(RawNodeId::new(5, 2)),
-            ),
-            (
-                StoredProperty::StringId(strings.intern("hello")),
-                StoredProperty::StringId(strings.intern("world")),
-            ),
-            (
-                StoredProperty::Enum(RawEnumId::new(1, 2)),
-                StoredProperty::Enum(RawEnumId::new(2, 1)),
-            ),
-        ];
-        for (left, right) in pairs {
-            let typ = left.typ();
-            assert_ne!(key_of(left), key_of(right), "keys collided for {typ}");
-        }
-    }
-
-    /// A `None`-typed slot has no per-item value, and an out-of-range read must not panic.
-    #[test]
-    fn value_key_is_zero_for_none_storage_and_out_of_range_reads() {
-        assert_eq!(
-            ValueKey::of(&StorageArray::new(PropertyType::None), 0),
-            ValueKey::default()
-        );
-        assert_eq!(
-            ValueKey::of(&StorageArray::new(PropertyType::Int), 3),
-            ValueKey::default()
-        );
     }
 
     #[test]
@@ -1176,39 +1160,6 @@ mod tests {
         let mut src = StorageArray::new(PropertyType::Int);
         let err = dst.try_append(&mut src).unwrap_err();
         assert!(matches!(err, Error::InvalidPropertyType { .. }));
-    }
-
-    #[test]
-    fn storage_array_try_extend_from_range_copies_a_slice() {
-        for sample in samples() {
-            let mut src = StorageArray::new(sample.typ());
-            for _ in 0..3 {
-                src.try_push(&sample).unwrap();
-            }
-            let mut dst = StorageArray::new(sample.typ());
-            dst.try_extend_from_range(&src, 0..2).unwrap();
-            assert_eq!(dst.len(), 2);
-        }
-    }
-
-    #[test]
-    fn storage_array_try_extend_from_range_rejects_mismatched_type_and_bad_range() {
-        let src = StorageArray::new(PropertyType::Int);
-        let mut bool_dst = StorageArray::new(PropertyType::Bool);
-        assert!(matches!(
-            bool_dst.try_extend_from_range(&src, 0..0).unwrap_err(),
-            Error::InvalidPropertyType { .. }
-        ));
-
-        let mut int_dst = StorageArray::new(PropertyType::Int);
-        assert!(matches!(
-            int_dst.try_extend_from_range(&src, 0..5).unwrap_err(),
-            Error::PropertyIndexOutOfBounds { .. }
-        ));
-
-        let mut none_dst = StorageArray::new(PropertyType::None);
-        let none_src = StorageArray::new(PropertyType::None);
-        none_dst.try_extend_from_range(&none_src, 0..0).unwrap();
     }
 
     #[test]

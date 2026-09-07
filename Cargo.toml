@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name = "strings_pool"
 harness = false
+
+[[bench]]
+name = "edge_property_read"
+harness = false

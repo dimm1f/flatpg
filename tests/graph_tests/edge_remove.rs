@@ -1,6 +1,5 @@
 use flatpg::{
     edge::Direction,
-    error::Error,
     graph::{Graph, builder::GraphDiff},
     node::RawNodeId,
     prelude::*,
@@ -12,12 +11,14 @@ use crate::common::{
     collect_edges, out_edge_dst_seqs, setup_graph_with_fan_out_edges, string_value,
 };
 
-/// Locks in the other documented gotcha from `GraphDiff::apply`'s doc comment: a stale
-/// `EdgeId` from before an earlier `apply` call's own removal can make `remove_edge`'s
-/// position-based and neighbor-based sides disagree about which edge to remove, leaving
-/// a dangling half-edge that fails `check_integrity` rather than an error at `apply` time.
+/// An `EdgeId` captured before an earlier removal still names its own edge.
+///
+/// A removal shifts every later edge on the same node down a position, so the id's recorded
+/// position stops naming the edge it was taken from. Removal treats that position as a hint
+/// only: for a kind carrying no property it re-scans by the endpoint the id records, so the
+/// stale id removes the edge it always meant rather than whichever one moved into its slot.
 #[test]
-fn remove_edge_with_id_captured_before_earlier_removal_corrupts_the_graph() {
+fn remove_edge_with_id_captured_before_earlier_removal_still_removes_its_own_edge() {
     let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
     let (beta1, beta2) = (betas[1], betas[2]);
 
@@ -49,12 +50,9 @@ fn remove_edge_with_id_captured_before_earlier_removal_corrupts_the_graph() {
         .apply(graph)
         .expect("apply diff built with the stale id");
 
-    // Position-based primary side: local position 1 is now beta2's edge, so alpha's Out
-    // list loses it. Neighbor-based secondary side: it re-searches for `stale`'s own
-    // recorded neighbor, beta1, so beta1's In list loses its (still-live) entry instead.
-    // beta2's In entry is left dangling with no matching Out entry on alpha.
-    let dsts = out_edge_dst_seqs(&graph, alpha);
-    assert_eq!(dsts, vec![beta1.seq()]);
+    // beta1's edge is gone — the one the stale id named — and beta2's, which had moved into
+    // its position, is untouched on both sides.
+    assert_eq!(out_edge_dst_seqs(&graph, alpha), vec![beta2.seq()]);
     assert_eq!(
         graph
             .get_edges_count(RawNodeId::from(&beta1), TestEdge::Plain, Direction::In)
@@ -67,10 +65,71 @@ fn remove_edge_with_id_captured_before_earlier_removal_corrupts_the_graph() {
             .unwrap(),
         1
     );
-    assert!(matches!(
-        graph.check_integrity(),
-        Err(Error::ReverseEdgeNotFound { .. })
-    ));
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+}
+
+/// The same for a kind that does carry a property: there the id's own `EdgeSeq` names the
+/// edge outright, so no endpoint scan is needed to get it right.
+#[test]
+fn stale_edge_id_of_a_valued_kind_removes_the_edge_its_identity_names() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta = setup.add_node(builders::BetaNodeBuilder::new().build());
+    for value in ["p0", "p1", "p2"] {
+        setup.add_edge(
+            alpha,
+            beta,
+            TestEdge::Labeled,
+            Some(PropertyValue::String(value.to_string())),
+        );
+    }
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+
+    let alpha = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+    let mut edges = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out);
+    edges.sort_by_key(|e| e.seq());
+    let stale = edges.remove(2);
+    let first = edges.remove(0);
+    assert!(stale.edge_seq().is_some(), "a valued kind carries identity");
+
+    let mut remove_first = GraphDiff::<TestSchema>::default();
+    remove_first.remove_edge(first);
+    let (graph, _) = remove_first.apply(graph).expect("apply first removal");
+
+    let mut remove_stale = GraphDiff::<TestSchema>::default();
+    remove_stale.remove_edge(stale);
+    let (graph, _) = remove_stale
+        .apply(graph)
+        .expect("apply diff built with the stale id");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    // "p0" went with the first removal and "p2" is the one the stale id named, so only the
+    // edge it never referred to survives.
+    let alpha = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+    let surviving: Vec<String> = collect_edges(&graph, alpha, TestEdge::Labeled, Direction::Out)
+        .into_iter()
+        .map(|edge| {
+            string_value(
+                &graph,
+                graph
+                    .get_edge_property(edge)
+                    .expect("edge property lookup")
+                    .next()
+                    .expect("a Labeled edge carries a value"),
+            )
+        })
+        .collect();
+    assert_eq!(surviving, vec!["p1"]);
 }
 
 #[test]
@@ -265,7 +324,10 @@ fn removing_one_of_two_parallel_edges_keeps_both_halves_of_the_survivor_in_agree
     out_edges.sort_by_key(|e| e.seq());
     let removed = out_edges.remove(1);
     assert_eq!(
-        string_value(&graph, graph.get_edge_property(removed).unwrap().unwrap()),
+        string_value(
+            &graph,
+            graph.get_edge_property(removed).unwrap().next().unwrap()
+        ),
         "p1"
     );
 
@@ -288,6 +350,7 @@ fn removing_one_of_two_parallel_edges_keeps_both_halves_of_the_survivor_in_agree
         graph
             .get_edge_property(survivor_out.remove(0))
             .unwrap()
+            .next()
             .unwrap(),
     );
     let from_in = string_value(
@@ -295,6 +358,7 @@ fn removing_one_of_two_parallel_edges_keeps_both_halves_of_the_survivor_in_agree
         graph
             .get_edge_property(survivor_in.remove(0))
             .unwrap()
+            .next()
             .unwrap(),
     );
     assert_eq!(

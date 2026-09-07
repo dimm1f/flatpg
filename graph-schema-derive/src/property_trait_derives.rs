@@ -4,7 +4,8 @@ use syn::{Error, Ident, ItemEnum, Variant};
 
 use crate::common::{enum_typ_inner_type, method_ident, typ_last_segment_name};
 use crate::enum_derives::{
-    PROPERTY_ATTR, PropertyItemAttrs, absent_attribute_error, find_attribute, parse_property_attr,
+    PROPERTY_ATTR, PropertyItemAttrs, QuantitySupport, absent_attribute_error, find_attribute,
+    parse_property_attr,
 };
 
 pub(crate) const TYP_NONE: &str = "None";
@@ -38,7 +39,7 @@ pub fn property_traits_derive(input: &ItemEnum) -> TokenStream {
                  ..
              }| {
                 find_attribute(PROPERTY_ATTR, attrs)
-                    .ok_or_else(|| absent_attribute_error(variant, true))
+                    .ok_or_else(|| absent_attribute_error(variant, QuantitySupport::Required))
                     .and_then(|attr| parse_property_attr(attr, variant))
             },
         )
@@ -165,6 +166,89 @@ pub(crate) fn property_binding(
     })
 }
 
+/// Whether a parsed `quantity = ...` value names `Multi`.
+pub(crate) fn quantity_is_multi(qty: &syn::TypePath) -> bool {
+    qty.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == QTY_MULTI)
+}
+
+/// The type a property accessor returns: the whole run for `Multi`, the single value for `One`.
+pub(crate) fn property_return_type(elem_ty: &TokenStream, is_multi: bool) -> TokenStream {
+    if is_multi {
+        quote!(::std::vec::Vec<#elem_ty>)
+    } else {
+        quote!(#elem_ty)
+    }
+}
+
+/// How an accessor's fetch expression hands its values back.
+pub(crate) enum PropertyFetch {
+    /// `Result<impl Iterator<Item = StoredProperty>, Error>`. The only shape that can carry a
+    /// `Multi` run.
+    Iterator(TokenStream),
+    /// `Result<Option<StoredProperty>, Error>`. Costs one indexed load instead of building an
+    /// iterator, so `One` kinds use it wherever the storage offers one.
+    Scalar(TokenStream),
+}
+
+/// Builds the body of a property accessor from the expression that fetches its values.
+///
+/// Nodes and edges differ only in that expression — `get_node_property` against a property
+/// kind, `get_edge_property`/`get_edge_property_one` against the edge — so the `One`/`Multi`
+/// split lives here once.
+pub(crate) fn property_accessor_body(
+    fetch: &PropertyFetch,
+    binding: &PropertyBinding,
+    is_multi: bool,
+) -> TokenStream {
+    let PropertyBinding {
+        pattern,
+        expr,
+        prop_type_path,
+        ..
+    } = binding;
+
+    let mismatch = quote! {
+        ::flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ())
+    };
+    let absent = quote! {
+        ::core::result::Result::Err(::flatpg::error::Error::property_index_not_found())
+    };
+
+    match (fetch, is_multi) {
+        (PropertyFetch::Iterator(getter), true) => quote! {
+            use ::core::iter::Iterator as _;
+
+            #getter?
+                .map(|p| match p {
+                    #pattern => #expr,
+                    other => ::core::result::Result::Err(#mismatch),
+                })
+                .collect()
+        },
+        (PropertyFetch::Iterator(getter), false) => quote! {
+            use ::core::iter::Iterator as _;
+
+            #getter
+                .and_then(|mut p| match p.next() {
+                    ::core::option::Option::Some(#pattern) => #expr,
+                    ::core::option::Option::Some(other) => ::core::result::Result::Err(#mismatch),
+                    ::core::option::Option::None => #absent,
+                })
+        },
+        (PropertyFetch::Scalar(getter), _) => quote! {
+            #getter
+                .and_then(|p| match p {
+                    ::core::option::Option::Some(#pattern) => #expr,
+                    ::core::option::Option::Some(other) => ::core::result::Result::Err(#mismatch),
+                    ::core::option::Option::None => #absent,
+                })
+        },
+    }
+}
+
 fn build_property_trait(
     enum_ident: &Ident,
     vis: &syn::Visibility,
@@ -174,11 +258,11 @@ fn build_property_trait(
     let typ = attrs
         .prop_typ
         .as_ref()
-        .ok_or_else(|| absent_attribute_error(variant, true))?;
+        .ok_or_else(|| absent_attribute_error(variant, QuantitySupport::Required))?;
     let qty = attrs
         .prop_qty
         .as_ref()
-        .ok_or_else(|| absent_attribute_error(variant, true))?;
+        .ok_or_else(|| absent_attribute_error(variant, QuantitySupport::Required))?;
 
     let typ_name = typ_last_segment_name(typ)?;
 
@@ -194,22 +278,12 @@ fn build_property_trait(
         ));
     }
 
-    let is_multi = qty
-        .path
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .map(|s| s == QTY_MULTI)
-        .unwrap_or_default();
+    let is_multi = quantity_is_multi(qty);
 
     let method_name = method_ident(variant);
 
-    let PropertyBinding {
-        elem_ty,
-        pattern,
-        expr,
-        prop_type_path,
-    } = property_binding(&typ_name, typ, &quote!(S))?;
+    let binding = property_binding(&typ_name, typ, &quote!(S))?;
+    let elem_ty = &binding.elem_ty;
 
     let (generics, self_param, where_clause) = if typ_name == TYP_STRING {
         (quote!(<'a>), quote!(&'a self), quote!(where S: 'a))
@@ -220,47 +294,24 @@ fn build_property_trait(
     let deprecated =
         (typ_name == TYP_NODE_ID).then(|| quote!(#[deprecated(note = #NODE_ID_DEPRECATION_NOTE)]));
 
-    let method = if is_multi {
-        quote! {
-            fn #method_name #generics (
-                #self_param
-            ) -> ::core::result::Result<::std::vec::Vec<#elem_ty>, ::flatpg::error::Error>
-            #where_clause
-            {
-                use ::core::iter::Iterator as _;
+    let return_ty = property_return_type(elem_ty, is_multi);
+    // Node property storage offers no scalar read: a node's values are a CSR run whatever the
+    // declared quantity, so even `One` goes through the iterator.
+    let body = property_accessor_body(
+        &PropertyFetch::Iterator(
+            quote!(self.graph().get_node_property(self.node_id(), #enum_ident::#variant)),
+        ),
+        &binding,
+        is_multi,
+    );
 
-                self.graph()
-                    .get_node_property(self.node_id(), #enum_ident::#variant)?
-                    .map(|p| match p {
-                        #pattern => #expr,
-                        other => ::core::result::Result::Err(
-                            ::flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ()),
-                        ),
-                    })
-                    .collect()
-            }
-        }
-    } else {
-        quote! {
-            fn #method_name #generics (
-                #self_param
-            ) -> ::core::result::Result<#elem_ty, ::flatpg::error::Error>
-            #where_clause
-            {
-                use ::core::iter::Iterator as _;
-
-                self.graph()
-                    .get_node_property(self.node_id(), #enum_ident::#variant)
-                    .and_then(|mut p| match p.next() {
-                        ::core::option::Option::Some(#pattern) => #expr,
-                        ::core::option::Option::Some(other) => ::core::result::Result::Err(
-                            ::flatpg::error::Error::invalid_property_type(#prop_type_path, other.typ()),
-                        ),
-                        ::core::option::Option::None => ::core::result::Result::Err(
-                            ::flatpg::error::Error::property_index_not_found(),
-                        ),
-                    })
-            }
+    let method = quote! {
+        fn #method_name #generics (
+            #self_param
+        ) -> ::core::result::Result<#return_ty, ::flatpg::error::Error>
+        #where_clause
+        {
+            #body
         }
     };
 

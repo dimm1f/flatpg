@@ -7,13 +7,14 @@ use crate::{
     property::PropertyValue,
     schema::{EdgeKind, NodeKind, PropKind, Schema},
     storage::{
-        EdgeStorage, EdgeStorageSlot, NodeMetaStorage, Offset, OffsetStorage, PropertyStorage,
-        StoredProperty,
+        EdgePropertyStorage, EdgeSeq, EdgeStorage, EdgeStorageSlot, NodeMetaStorage, Offset,
+        OffsetStorage, PropertyStorage, StorageArrayIter, StoredProperty,
     },
     strings_pool::{RawStringId, StringsPool},
 };
 
 pub mod builder;
+mod compact;
 pub mod integrity;
 pub mod raw;
 
@@ -21,6 +22,7 @@ pub struct Graph<S> {
     node_meta_storage: NodeMetaStorage<S>,
     edge_storage: EdgeStorage<S>,
     property_storage: PropertyStorage<S>,
+    edge_property_storage: EdgePropertyStorage<S>,
     strings: StringsPool,
 }
 
@@ -30,6 +32,7 @@ impl<S: Schema> Graph<S> {
             node_meta_storage: NodeMetaStorage::new(),
             edge_storage: EdgeStorage::new(),
             property_storage: PropertyStorage::new(),
+            edge_property_storage: EdgePropertyStorage::new(),
             strings: StringsPool::new(),
         }
     }
@@ -194,25 +197,106 @@ impl<S: Schema> Graph<S> {
                     .try_into()
                     .expect("neighbor kind checked on graph construction");
 
-                EdgeId::from_half(src_node, neighbor, edge_kind, direction, seq)
+                // Absent exactly for kinds carrying no property; the region is already in cache
+                // from reading the neighbor beside it.
+                let edge_seq = slot.edges().get(start.value() + seq).copied();
+
+                EdgeId::from_half(src_node, neighbor, edge_kind, direction, seq, edge_seq)
             }))
     }
 
-    /// Returns the raw property attached to `edge`, or `Ok(None)` when the edge's
-    /// kind carries no property value.
-    pub fn get_edge_property(&self, edge: EdgeId<S>) -> Result<Option<StoredProperty>, Error> {
-        // `edge.seq()` indexes the adjacency list of the node the edge was queried
-        // from; for In-direction edges that node is `dst_node`, not `src_node`.
-        let (node_ref, direction, _, _) = edge
-            .direction()
-            .orient_edge((&edge.src_node()).into(), (&edge.dst_node()).into());
+    /// Locates one half-edge's slot and its absolute position within that slot's arrays.
+    ///
+    /// `seq` indexes the adjacency list of the node the edge was read from; for In-direction
+    /// edges that node is `dst`, not `src`, which is what `orient_edge` sorts out here.
+    fn locate_half_edge(
+        &self,
+        src: RawNodeId,
+        dst: RawNodeId,
+        edge_kind: EdgeKind<S>,
+        direction: Direction,
+        seq: usize,
+    ) -> Result<(&EdgeStorageSlot, Offset), Error> {
+        let (node_ref, direction, _, _) = direction.orient_edge(src, dst);
 
         let node_kind = S::resolve_node_kind(node_ref)?;
-        let slot_index = S::edge_storage_slot(node_kind, direction, edge.kind());
+        let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind);
         let slot = &self.edge_storage[slot_index.index()];
-        let (start, _) = self.get_edges_offset(node_ref, slot)?;
+        let (start, end) = self.get_edges_offset(node_ref, slot)?;
 
-        Ok(slot.get_value(Offset::new(start.value() + edge.seq())?))
+        let position = Offset::new(start.value() + seq)?;
+        if position >= end {
+            return Err(Error::property_index_out_of_bounds(
+                position.value(),
+                end.value(),
+                slot.neighbors().len(),
+            ));
+        }
+        Ok((slot, position))
+    }
+
+    /// Returns the identity of one half-edge, or `None` when its kind carries no property and
+    /// so allocates none, or when the position no longer resolves.
+    pub fn half_edge_seq(
+        &self,
+        src: RawNodeId,
+        dst: RawNodeId,
+        edge_kind: EdgeKind<S>,
+        direction: Direction,
+        seq: usize,
+    ) -> Option<EdgeSeq> {
+        let (slot, position) = self
+            .locate_half_edge(src, dst, edge_kind, direction, seq)
+            .ok()?;
+        slot.get_edge_seq(position)
+    }
+
+    /// Returns the single raw property value attached to `edge`, for a kind declared
+    /// `quantity = One`.
+    ///
+    /// `Ok(None)` when the kind carries no property. This is the read the typed accessors of
+    /// `One` kinds use: it costs one indexed load where [`Graph::get_edge_property`] has to
+    /// build an iterator, which is most of the cost of fetching a single value. A `Multi` kind
+    /// yields `Ok(None)` here and must use that method instead.
+    pub fn get_edge_property_one(&self, edge: EdgeId<S>) -> Result<Option<StoredProperty>, Error> {
+        let (slot, position) = self.locate_half_edge(
+            (&edge.src_node()).into(),
+            (&edge.dst_node()).into(),
+            edge.kind(),
+            edge.direction(),
+            edge.seq(),
+        )?;
+
+        let Some(edge_seq) = slot.get_edge_seq(position) else {
+            return Ok(None);
+        };
+
+        Ok(self.edge_property_storage[edge.kind().index()].get_one(edge_seq))
+    }
+
+    /// Returns the raw property values attached to `edge`.
+    ///
+    /// The iterator is empty when the edge's kind carries no property; a `One`-quantity kind
+    /// yields exactly one value and a `Multi` kind as many as the edge carries.
+    pub fn get_edge_property(
+        &self,
+        edge: EdgeId<S>,
+    ) -> Result<impl Iterator<Item = StoredProperty>, Error> {
+        let (slot, position) = self.locate_half_edge(
+            (&edge.src_node()).into(),
+            (&edge.dst_node()).into(),
+            edge.kind(),
+            edge.direction(),
+            edge.seq(),
+        )?;
+
+        // An edge kind carrying no property allocates no `EdgeSeq`, so there is nothing to
+        // resolve: the empty `edges` array is the schema's `PropertyType::None` made concrete.
+        let Some(edge_seq) = slot.get_edge_seq(position) else {
+            return Ok(StorageArrayIter::Empty);
+        };
+
+        self.edge_property_storage[edge.kind().index()].get(edge_seq)
     }
 }
 
@@ -228,6 +312,7 @@ impl<S: Schema> CheckIntegrity<S> for Graph<S> {
             &self.node_meta_storage,
             &self.edge_storage,
             &self.property_storage,
+            &self.edge_property_storage,
             &self.strings,
         )
     }

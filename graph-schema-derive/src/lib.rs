@@ -14,6 +14,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Error, ItemEnum, parse_macro_input};
 
+use crate::enum_derives::QuantitySupport;
+
 #[proc_macro_derive(ItemAll)]
 pub fn enum_item_all(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemEnum);
@@ -101,7 +103,8 @@ pub fn edge_kind_derive(input: TokenStream) -> TokenStream {
     let enum_item_index = enum_derives::enum_item_index_derive(&input);
     let enum_item_as_str = enum_derives::enum_item_as_str_derive(&input);
     let enum_item_from_str = enum_derives::enum_item_from_str_derive(&input);
-    let enum_item_property_type = enum_derives::item_kind_property_type_derive(&input, false);
+    let enum_item_property_type =
+        enum_derives::item_kind_property_type_derive(&input, QuantitySupport::Optional);
     let edge_structs = edge_structs_derives::edge_structs_derive(&input, &config)
         .unwrap_or_else(Error::into_compile_error);
     let edges_accessor = graph_view_derives::edges_accessor_trait_derive(&input, &config);
@@ -191,7 +194,8 @@ pub fn property_kind_derive(input: TokenStream) -> TokenStream {
     let enum_item_index = enum_derives::enum_item_index_derive(&input);
     let enum_item_as_str = enum_derives::enum_item_as_str_derive(&input);
     let enum_item_from_str = enum_derives::enum_item_from_str_derive(&input);
-    let enum_item_property_type = enum_derives::item_kind_property_type_derive(&input, true);
+    let enum_item_property_type =
+        enum_derives::item_kind_property_type_derive(&input, QuantitySupport::Required);
     let property_traits = property_trait_derives::property_traits_derive(&input);
 
     quote! {

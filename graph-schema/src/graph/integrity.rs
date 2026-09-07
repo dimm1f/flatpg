@@ -4,18 +4,18 @@
 //! [`crate::graph::builder::GraphDiff::apply`] keeps this true step by step as it builds the
 //! graph. This check verifies the same rules directly on the final data: offset arrays are
 //! well-formed, storage slot types match the schema, node/string/enum references point to real
-//! data, and every edge has a matching reverse edge carrying the same property value.
+//! data, and every edge has exactly one half-edge per direction joining the same two nodes.
 //! `TryFrom<RawGraph<S>> for Graph<S>` runs this check before returning a valid
 //! [`Graph<S>`](crate::graph::Graph).
 //!
-//! How values compare when pairing half-edges:
-//! - Two halves pair only when they agree on their property value as well as their endpoints.
-//!   Values compare through a canonical encoding, so floats compare **bitwise**: `-0.0` and
-//!   `0.0` are different values, and a NaN pairs only with an identical bit pattern.
-//! - Strings compare by interned id, which is exact because a graph has exactly one
-//!   [`StringsPool`] and interning deduplicates.
-//! - Edge kinds typed [`PropertyType::None`] carry no per-edge value, so for them pairing is
-//!   endpoint-and-degree symmetry as before.
+//! How half-edges pair up depends on whether their kind allocates identities:
+//! - A kind carrying a property gives each of its edges an [`EdgeSeq`], stored on both halves.
+//!   Pairing scatters the halves by that seq and requires exactly one `Out` and one `In` half
+//!   per seq, agreeing on the two nodes they join. No property value is compared: it is stored
+//!   once, so the halves cannot disagree about it.
+//! - A kind typed [`PropertyType::None`] allocates no `EdgeSeq` — its edges carry no data and
+//!   parallel ones are interchangeable — so pairing is endpoint-and-degree symmetry over sorted
+//!   multisets, which also catches a mismatched count of parallel edges.
 //!
 //! Known limitation: string ids are only bounds-checked, because [`StringsPool::get`] cannot
 //! tell a foreign handle from its own. A [`RawStringId`] from another pool that happens to be
@@ -29,11 +29,11 @@ use crate::{
     enum_property::RawEnumId,
     error::Error,
     node::RawNodeId,
-    property::PropertyType,
+    property::{PropertyType, QuantityType},
     schema::Schema,
     storage::{
-        EdgeStorage, NodeMetaStorage, Offset, OffsetStorage, PropertyStorage, StorageArray,
-        ValueKey,
+        EdgePropertyStorage, EdgeSeq, EdgeStorage, NodeMetaStorage, Offset, OffsetStorage,
+        PropertyStorage, StorageArray,
     },
     strings_pool::{RawStringId, StringsPool},
 };
@@ -95,19 +95,51 @@ impl NodeIndex {
     }
 }
 
-/// A half-edge canonicalized as a `(source, destination)` pair plus its property value, so that
-/// the two halves of one edge produce the same value whichever endpoint they are stored on.
+/// A half-edge canonicalized as a `(source, destination)` pair, so that the two halves of one
+/// edge produce the same pair whichever endpoint they are stored on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct HalfEdge {
     src: DenseNodeId,
     dst: DenseNodeId,
-    value: ValueKey,
+}
+
+impl HalfEdge {
+    /// Marks a seq no half-edge claimed. Using a sentinel rather than `Option` keeps the
+    /// scatter arrays at 8 bytes per edge; `DenseNodeId(u32::MAX)` cannot name a real node,
+    /// since [`NodeIndex::new`] rejects a graph whose node count reaches `u32::MAX`.
+    const ABSENT: Self = Self {
+        src: DenseNodeId(u32::MAX),
+        dst: DenseNodeId(u32::MAX),
+    };
+}
+
+/// The half-edges one edge kind's slots contribute to the pairing check, in one of two forms.
+///
+/// Exactly one is populated, decided by whether the kind allocates [`EdgeSeq`]s — every slot
+/// of a kind agrees on that, because it follows from the schema alone.
+#[derive(Default, Clone)]
+struct KindHalves {
+    /// `(identity, endpoints)` for kinds that allocate identities; paired by scattering.
+    identified: Vec<(EdgeSeq, HalfEdge)>,
+    /// Endpoints alone, for kinds that do not; paired by sorted multiset.
+    anonymous: Vec<HalfEdge>,
+}
+
+impl KindHalves {
+    fn reserve(&mut self, additional: usize, identified: bool) {
+        if identified {
+            self.identified.reserve(additional);
+        } else {
+            self.anonymous.reserve(additional);
+        }
+    }
 }
 
 struct Storages<'a, S: Schema> {
     node_meta: &'a NodeMetaStorage<S>,
     edges: &'a EdgeStorage<S>,
     properties: &'a PropertyStorage<S>,
+    edge_properties: &'a EdgePropertyStorage<S>,
     strings: &'a StringsPool,
     nodes: NodeIndex,
 }
@@ -125,14 +157,21 @@ pub(crate) fn check_integrity<S: Schema>(
     node_meta_storage: &NodeMetaStorage<S>,
     edge_storage: &EdgeStorage<S>,
     property_storage: &PropertyStorage<S>,
+    edge_property_storage: &EdgePropertyStorage<S>,
     strings: &StringsPool,
 ) -> Result<(), Error> {
-    check_storage_sizes::<S>(node_meta_storage, edge_storage, property_storage)?;
+    check_storage_sizes::<S>(
+        node_meta_storage,
+        edge_storage,
+        property_storage,
+        edge_property_storage,
+    )?;
 
     let storages = Storages {
         node_meta: node_meta_storage,
         edges: edge_storage,
         properties: property_storage,
+        edge_properties: edge_property_storage,
         strings,
         nodes: NodeIndex::new(
             S::node_kinds()
@@ -155,8 +194,12 @@ fn check_slots<S: Schema>(storages: &Storages<'_, S>) -> Result<(), Error> {
         check_property_slot(storages, node_kind, property_kind)?;
     }
 
-    let mut out_halves = vec![Vec::new(); S::number_of_edge_kinds()];
-    let mut in_halves = vec![Vec::new(); S::number_of_edge_kinds()];
+    for &edge_kind in S::edge_kinds() {
+        check_edge_property_store(storages, edge_kind)?;
+    }
+
+    let mut out_halves = vec![KindHalves::default(); S::number_of_edge_kinds()];
+    let mut in_halves = vec![KindHalves::default(); S::number_of_edge_kinds()];
 
     for (node_kind, direction, edge_kind) in S::edge_storage_slots_iter() {
         let halves = match direction {
@@ -172,12 +215,75 @@ fn check_slots<S: Schema>(storages: &Storages<'_, S>) -> Result<(), Error> {
                 edge_kind,
                 nodes: &storages.nodes,
             },
+            storages.edge_properties[edge_kind.index()].count(),
             &mut out_halves[edge_kind.index()],
             &mut in_halves[edge_kind.index()],
         )?;
     }
 
     Ok(())
+}
+
+/// Checks one edge kind's property store: its column's type, the shape its quantity implies,
+/// and the node/string/enum ids its values embed.
+fn check_edge_property_store<S: Schema>(
+    storages: &Storages<'_, S>,
+    edge_kind: S::E,
+) -> Result<(), Error> {
+    let label = format!("EdgePropertyStore({})", edge_kind.as_str());
+    let store = &storages.edge_properties[edge_kind.index()];
+    let expected_type = S::edge_property_type(edge_kind);
+    check_storage_type(store.values(), expected_type)?;
+
+    if expected_type == PropertyType::None {
+        // Such a kind stores nothing and hands out no identity, so nothing may be there:
+        // a non-zero count would leave `EdgeSeq`s no half-edge can legally carry.
+        if store.count() != 0 {
+            return Err(Error::offsets_bounds_mismatch(label, 0, store.count()));
+        }
+        if !store.offsets().is_empty() {
+            return Err(Error::offsets_length_mismatch(
+                label,
+                0,
+                store.offsets().len(),
+            ));
+        }
+        return Ok(());
+    }
+
+    if S::edge_property_quantity(edge_kind) == QuantityType::Multi {
+        // `check_offsets_shape` waves an empty array through as "slot unused", which is only
+        // true here while no edge of the kind exists.
+        if store.offsets().is_empty() && store.count() != 0 {
+            return Err(Error::offsets_length_mismatch(label, store.count() + 1, 0));
+        }
+        check_offsets_shape(&label, store.offsets(), store.count())?;
+        check_offsets_bounds(&label, store.offsets(), store.values().len())?;
+    } else {
+        // `One` lets an `EdgeSeq` index `values` directly, so it keeps no offsets at all and
+        // the column holds exactly one value per edge handed an identity.
+        if !store.offsets().is_empty() {
+            return Err(Error::offsets_length_mismatch(
+                label,
+                0,
+                store.offsets().len(),
+            ));
+        }
+        if store.values().len() != store.count() {
+            return Err(Error::offsets_bounds_mismatch(
+                label,
+                store.count(),
+                store.values().len(),
+            ));
+        }
+    }
+
+    check_values_content::<S>(
+        store.values(),
+        storages.node_meta,
+        storages.strings,
+        S::edge_property_enum_index(edge_kind),
+    )
 }
 
 /// Checks one node property storage slot, and the node/string/enum ids its values embed.
@@ -212,7 +318,7 @@ fn check_edge_slot<S: Schema>(
     node_kind: S::N,
     direction: Direction,
     edge_kind: S::E,
-    halves: &mut Vec<HalfEdge>,
+    halves: &mut KindHalves,
 ) -> Result<(), Error> {
     let slot_index = S::edge_storage_slot(node_kind, direction, edge_kind);
     let expected_count = storages.node_meta[node_kind.index()].len();
@@ -225,34 +331,51 @@ fn check_edge_slot<S: Schema>(
         check_node_id::<S>(*node_id, storages.node_meta)?;
     }
 
-    let expected_prop_type = S::edge_property_type(edge_kind);
-    check_storage_type(slot.values(), expected_prop_type)?;
-    if expected_prop_type != PropertyType::None {
-        check_offsets_bounds(slot_index, slot.offsets(), slot.values().len())?;
+    // A kind carrying a property gives every one of its half-edges an `EdgeSeq`; one typed
+    // `PropertyType::None` gives none. Anything between would desynchronize `edges` from
+    // `neighbors` and shift identities onto the wrong edges.
+    let identified = S::edge_property_type(edge_kind) != PropertyType::None;
+    let expected_edges = if identified {
+        slot.neighbors().len()
+    } else {
+        0
+    };
+    if slot.edges().len() != expected_edges {
+        return Err(Error::edge_seq_length_mismatch(
+            slot_index.to_string(),
+            expected_edges,
+            slot.edges().len(),
+        ));
     }
-    check_values_content::<S>(
-        slot.values(),
-        storages.node_meta,
-        storages.strings,
-        S::edge_property_enum_index(edge_kind),
-    )?;
 
-    debug_assert_eq!(slot.values().typ(), expected_prop_type);
+    let count = storages.edge_properties[edge_kind.index()].count();
+    for &edge_seq in slot.edges() {
+        if edge_seq.index() >= count {
+            return Err(Error::edge_seq_out_of_bounds(
+                edge_kind.as_str(),
+                edge_seq.index(),
+                count,
+            ));
+        }
+    }
 
-    let values = slot.values();
-    halves.reserve(slot.neighbors().len());
+    halves.reserve(slot.neighbors().len(), identified);
     for (seq, window) in slot.offsets().windows(2).enumerate() {
         let node = RawNodeId::new(node_kind.index(), seq);
         let start = window[0].value();
         let node = storages.nodes.densify(node);
         for (offset, neighbor) in slot.get_neighbors(window[0], window[1]).enumerate() {
-            let value = ValueKey::of(values, start + offset);
             let neighbor = storages.nodes.densify(neighbor);
             let (src, dst) = match direction {
                 Direction::Out => (node, neighbor),
                 Direction::In => (neighbor, node),
             };
-            halves.push(HalfEdge { src, dst, value });
+            let ends = HalfEdge { src, dst };
+            // The length check above pins which arm this takes for every half of the slot.
+            match slot.edges().get(start + offset) {
+                Some(&edge_seq) => halves.identified.push((edge_seq, ends)),
+                None => halves.anonymous.push(ends),
+            }
         }
     }
 
@@ -263,7 +386,15 @@ fn check_storage_sizes<S: Schema>(
     node_meta_storage: &NodeMetaStorage<S>,
     edge_storage: &EdgeStorage<S>,
     property_storage: &PropertyStorage<S>,
+    edge_property_storage: &EdgePropertyStorage<S>,
 ) -> Result<(), Error> {
+    if edge_property_storage.len() != S::number_of_edge_kinds() {
+        return Err(Error::storage_size_mismatch(
+            "edge_property_storage",
+            S::number_of_edge_kinds(),
+            edge_property_storage.len(),
+        ));
+    }
     if node_meta_storage.len() != S::number_of_node_kinds() {
         return Err(Error::storage_size_mismatch(
             "node_meta_storage",
@@ -439,26 +570,99 @@ fn check_enum_id<EPR: EnumPropertyRegistry>(
     Ok(())
 }
 
-/// Confirms every half-edge of one edge kind has a matching reverse half, with the same count
-/// and the same property value.
+/// Confirms every half-edge of one edge kind has a matching reverse half.
 ///
-/// Both halves of an edge canonicalize to the same `(source, destination, value)`, so the two
-/// sides pair up exactly when `out_halves` and `in_halves` hold equal multisets. Sorting
-/// makes that comparison a linear scan and pins the reported error to the lowest-ordered
-/// unpaired half. Both slices are left sorted.
-///
-/// Comparing multisets rather than testing each half for the mere existence of a reverse
-/// catches a mismatched count of parallel edges: two `Out` edges from A to B against a
-/// single `In` edge back from B to A does have a matching reverse edge — just not enough
-/// of them.
-fn check_half_edge_pairing<E: ItemAsStr>(
+/// Which of the two strategies applies follows from the schema, so the populated arm of
+/// [`KindHalves`] decides it: identities where the kind has them, sorted multisets where it
+/// does not.
+fn check_half_edge_pairing<E: ItemAsStr + Copy>(
     report: PairingReport<'_, E>,
-    out_halves: &mut [HalfEdge],
-    in_halves: &mut [HalfEdge],
+    count: usize,
+    out_halves: &mut KindHalves,
+    in_halves: &mut KindHalves,
 ) -> Result<(), Error> {
-    out_halves.sort_unstable();
-    in_halves.sort_unstable();
-    report_pairing_mismatch(report, out_halves, in_halves)
+    if out_halves.anonymous.is_empty() && in_halves.anonymous.is_empty() {
+        return check_pairing_by_edge_seq(
+            report,
+            count,
+            &out_halves.identified,
+            &in_halves.identified,
+        );
+    }
+    out_halves.anonymous.sort_unstable();
+    in_halves.anonymous.sort_unstable();
+    report_pairing_mismatch(report, &out_halves.anonymous, &in_halves.anonymous)
+}
+
+/// Pairs an edge kind's halves by the identity they share.
+///
+/// Each `EdgeSeq` must be claimed by exactly one `Out` and one `In` half, and both must
+/// canonicalize to the same `(source, destination)`. A seq claimed by neither is an edge
+/// removed since the last compaction, which is not a defect. Scattering by seq costs one pass
+/// and `count` entries instead of sorting both sides, and needs no value comparison at all:
+/// the property lives in one place, so there are no two copies to disagree.
+fn check_pairing_by_edge_seq<E: ItemAsStr + Copy>(
+    report: PairingReport<'_, E>,
+    count: usize,
+    out_halves: &[(EdgeSeq, HalfEdge)],
+    in_halves: &[(EdgeSeq, HalfEdge)],
+) -> Result<(), Error> {
+    let PairingReport { edge_kind, nodes } = report;
+
+    let mut out_ends = vec![HalfEdge::ABSENT; count];
+    let mut in_ends = vec![HalfEdge::ABSENT; count];
+    scatter_halves(edge_kind, Direction::Out, out_halves, &mut out_ends)?;
+    scatter_halves(edge_kind, Direction::In, in_halves, &mut in_ends)?;
+
+    for (out_half, in_half) in out_ends.iter().zip(in_ends.iter()) {
+        if out_half == in_half {
+            // Either both halves agree, or neither exists and the seq is dead storage.
+            continue;
+        }
+
+        // Whichever half is present is the one whose reverse is missing or points elsewhere;
+        // when both are present but disagree, the `Out` side names the defect.
+        let (half, direction) = if *out_half != HalfEdge::ABSENT {
+            (*out_half, Direction::Out)
+        } else {
+            (*in_half, Direction::In)
+        };
+        let (node, target) = match direction {
+            Direction::Out => (half.src, half.dst),
+            Direction::In => (half.dst, half.src),
+        };
+        return Err(Error::reverse_edge_not_found(
+            nodes.label(target),
+            nodes.label(node),
+            direction.as_str(),
+            edge_kind.as_str(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Places each half at its own seq, rejecting a seq two halves of the same direction claim.
+fn scatter_halves<E: ItemAsStr>(
+    edge_kind: E,
+    direction: Direction,
+    halves: &[(EdgeSeq, HalfEdge)],
+    ends: &mut [HalfEdge],
+) -> Result<(), Error> {
+    for &(edge_seq, half) in halves {
+        // In range because `check_edge_slot` bounds every `EdgeSeq` against the same count
+        // these arrays were sized from.
+        let slot = &mut ends[edge_seq.index()];
+        if *slot != HalfEdge::ABSENT {
+            return Err(Error::duplicate_half_edge(
+                edge_kind.as_str(),
+                edge_seq.index(),
+                direction.as_str(),
+            ));
+        }
+        *slot = half;
+    }
+    Ok(())
 }
 
 struct PairingReport<'a, E> {
@@ -468,6 +672,12 @@ struct PairingReport<'a, E> {
 
 /// Reports the lowest-ordered half-edge that has no matching reverse, given both sides already
 /// sorted.
+///
+/// Comparing multisets rather than testing each half for the mere existence of a reverse
+/// catches a mismatched count of parallel edges: two `Out` edges from A to B against a single
+/// `In` edge back from B to A does have a matching reverse edge — just not enough of them.
+/// Only kinds without [`EdgeSeq`]s reach here; the rest pair by identity, where the count
+/// follows from each seq holding exactly one half per direction.
 fn report_pairing_mismatch<E: ItemAsStr>(
     report: PairingReport<'_, E>,
     out_halves: &[HalfEdge],
@@ -479,19 +689,6 @@ fn report_pairing_mismatch<E: ItemAsStr>(
         .iter()
         .zip(in_halves.iter())
         .position(|(out_half, in_half)| out_half != in_half);
-
-    // Same edge on both sides, disagreeing only about its value: the reverse half is present,
-    // so reporting it as missing would send a reader looking for the wrong defect.
-    if let Some(i) = mismatch {
-        let (out_half, in_half) = (out_halves[i], in_halves[i]);
-        if out_half.src == in_half.src && out_half.dst == in_half.dst {
-            return Err(Error::edge_half_property_mismatch(
-                edge_kind.as_str(),
-                nodes.label(out_half.src),
-                nodes.label(out_half.dst),
-            ));
-        }
-    }
 
     let (half, direction) = match mismatch {
         Some(i) if out_halves[i] < in_halves[i] => (out_halves[i], Direction::Out),
@@ -528,8 +725,8 @@ mod parallel {
     use crate::EdgeDirectionKind;
 
     use super::{
-        Direction, Error, HalfEdge, ItemIndex, PairingReport, Schema, Storages, check_edge_slot,
-        check_property_slot, report_pairing_mismatch,
+        Direction, Error, ItemIndex, KindHalves, PairingReport, Schema, Storages,
+        check_edge_property_store, check_edge_slot, check_half_edge_pairing, check_property_slot,
     };
 
     /// Node-plus-half-edge count below which the sequential driver wins.
@@ -560,6 +757,11 @@ mod parallel {
             })
             .reduce(|| Ok(()), |a, b| a.and(b))?;
 
+        S::edge_kinds()
+            .par_iter()
+            .map(|&edge_kind| check_edge_property_store(storages, edge_kind))
+            .reduce(|| Ok(()), |a, b| a.and(b))?;
+
         let buckets: Vec<_> = S::edge_kinds()
             .iter()
             .flat_map(|&edge_kind| {
@@ -569,10 +771,10 @@ mod parallel {
             })
             .collect();
 
-        let collected: Vec<Result<Vec<HalfEdge>, Error>> = buckets
+        let collected: Vec<Result<KindHalves, Error>> = buckets
             .par_iter()
             .map(|&(edge_kind, direction)| {
-                let mut halves = Vec::new();
+                let mut halves = KindHalves::default();
                 for &node_kind in S::node_kinds() {
                     check_edge_slot(storages, node_kind, direction, edge_kind, &mut halves)?;
                 }
@@ -580,8 +782,8 @@ mod parallel {
             })
             .collect();
 
-        let mut out_halves: Vec<Vec<HalfEdge>> = vec![Vec::new(); S::number_of_edge_kinds()];
-        let mut in_halves: Vec<Vec<HalfEdge>> = vec![Vec::new(); S::number_of_edge_kinds()];
+        let mut out_halves = vec![KindHalves::default(); S::number_of_edge_kinds()];
+        let mut in_halves = vec![KindHalves::default(); S::number_of_edge_kinds()];
         for (&(edge_kind, direction), halves) in buckets.iter().zip(collected) {
             match direction {
                 Direction::Out => out_halves[edge_kind.index()] = halves?,
@@ -589,17 +791,20 @@ mod parallel {
             }
         }
 
+        // Scattering by `EdgeSeq` writes into one array per kind, so it stays inside this
+        // per-kind unit of work rather than being split further; the sorted path for kinds
+        // without identities parallelizes as it did.
         out_halves
             .par_iter_mut()
             .zip(in_halves.par_iter_mut())
             .zip(S::edge_kinds().par_iter())
             .map(|((out, incoming), &edge_kind)| {
-                rayon::join(|| out.par_sort_unstable(), || incoming.par_sort_unstable());
-                report_pairing_mismatch(
+                check_half_edge_pairing(
                     PairingReport {
                         edge_kind,
                         nodes: &storages.nodes,
                     },
+                    storages.edge_properties[edge_kind.index()].count(),
                     out,
                     incoming,
                 )
@@ -613,7 +818,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use crate::{ItemAll, ItemFromIndex, ItemFromStr, storage::StoredProperty};
+    use crate::{ItemAll, ItemFromIndex, ItemFromStr};
 
     #[test]
     fn offsets_shape_accepts_valid() {
@@ -823,29 +1028,52 @@ mod tests {
         HalfEdge {
             src: dense(src),
             dst: dense(dst),
-            value: ValueKey::default(),
         }
     }
 
-    fn valued_half(src: usize, dst: usize, value: i32) -> HalfEdge {
-        let mut values = StorageArray::new(PropertyType::Int);
-        values.try_push(&StoredProperty::Int(value)).unwrap();
-        HalfEdge {
-            src: dense(src),
-            dst: dense(dst),
-            value: ValueKey::of(&values, 0),
-        }
+    /// Pairs halves of a kind that allocates no `EdgeSeq`, by sorted multiset.
+    fn pair(out_halves: &[HalfEdge], in_halves: &[HalfEdge]) -> Result<(), Error> {
+        let mut out = KindHalves {
+            anonymous: out_halves.to_vec(),
+            ..KindHalves::default()
+        };
+        let mut incoming = KindHalves {
+            anonymous: in_halves.to_vec(),
+            ..KindHalves::default()
+        };
+        check_half_edge_pairing(report(), 0, &mut out, &mut incoming)
     }
 
-    fn pair(out_halves: &mut [HalfEdge], in_halves: &mut [HalfEdge]) -> Result<(), Error> {
-        check_half_edge_pairing(
-            PairingReport {
-                edge_kind: TestRegistry::Status,
-                nodes: &one_kind_index(),
-            },
-            out_halves,
-            in_halves,
-        )
+    /// Pairs halves of a kind that does, by the identity each claims.
+    fn pair_by_seq(
+        count: usize,
+        out_halves: &[(usize, HalfEdge)],
+        in_halves: &[(usize, HalfEdge)],
+    ) -> Result<(), Error> {
+        let identify = |halves: &[(usize, HalfEdge)]| {
+            halves
+                .iter()
+                .map(|&(seq, ends)| (EdgeSeq::new(seq).expect("seq fits in u32"), ends))
+                .collect::<Vec<_>>()
+        };
+        let mut out = KindHalves {
+            identified: identify(out_halves),
+            ..KindHalves::default()
+        };
+        let mut incoming = KindHalves {
+            identified: identify(in_halves),
+            ..KindHalves::default()
+        };
+        check_half_edge_pairing(report(), count, &mut out, &mut incoming)
+    }
+
+    fn report() -> PairingReport<'static, TestRegistry> {
+        // Leaked so the helpers above can hand back a `'static` report without threading a
+        // borrow through every call; one small allocation per test run.
+        PairingReport {
+            edge_kind: TestRegistry::Status,
+            nodes: Box::leak(Box::new(one_kind_index())),
+        }
     }
 
     #[test]
@@ -914,16 +1142,12 @@ mod tests {
 
     #[test]
     fn half_edge_pairing_accepts_reordered_matching_halves() {
-        let mut out_halves = [half(0, 1), half(2, 3)];
-        let mut in_halves = [half(2, 3), half(0, 1)];
-        assert!(pair(&mut out_halves, &mut in_halves).is_ok());
+        assert!(pair(&[half(0, 1), half(2, 3)], &[half(2, 3), half(0, 1)]).is_ok());
     }
 
     #[test]
     fn half_edge_pairing_rejects_out_half_without_reverse() {
-        let mut out_halves = [half(0, 1), half(0, 2)];
-        let mut in_halves = [half(0, 1)];
-        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
+        let err = pair(&[half(0, 1), half(0, 2)], &[half(0, 1)]).expect_err("expected an error");
 
         let Error::ReverseEdgeNotFound {
             target,
@@ -941,9 +1165,7 @@ mod tests {
 
     #[test]
     fn half_edge_pairing_rejects_in_half_without_reverse() {
-        let mut out_halves = [half(0, 1)];
-        let mut in_halves = [half(0, 1), half(0, 2)];
-        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
+        let err = pair(&[half(0, 1)], &[half(0, 1), half(0, 2)]).expect_err("expected an error");
 
         let Error::ReverseEdgeNotFound {
             target,
@@ -959,55 +1181,75 @@ mod tests {
         assert_eq!(direction, "In");
     }
 
+    /// Without identities, parallel edges are told apart only by counting: two `Out` halves
+    /// against one `In` half does have a matching reverse — just not enough of them.
     #[test]
     fn half_edge_pairing_rejects_parallel_edge_count_mismatch() {
-        let mut out_halves = [half(0, 1), half(0, 1)];
-        let mut in_halves = [half(0, 1)];
-        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
+        let err = pair(&[half(0, 1), half(0, 1)], &[half(0, 1)]).expect_err("expected an error");
         assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
     }
 
     #[test]
-    fn half_edge_pairing_rejects_divergent_property_values() {
-        let mut out_halves = [valued_half(0, 1, 7)];
-        let mut in_halves = [valued_half(0, 1, 9)];
-        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
-
-        let Error::EdgeHalfPropertyMismatch { src, dst, .. } = &err else {
-            panic!("expected EdgeHalfPropertyMismatch, got {err:?}");
-        };
-        assert_eq!(*src, labeled(0));
-        assert_eq!(*dst, labeled(1));
-        // The message must name both storage lists, so a reader knows where to look without
-        // being told the values themselves.
-        let message = err.to_string();
+    fn seq_pairing_accepts_halves_claiming_the_same_seq() {
         assert!(
-            message.contains("Node(0)'s Out Status list")
-                && message.contains("Node(1)'s In Status list"),
-            "message should name both halves' lists, got: {message}"
+            pair_by_seq(
+                2,
+                &[(0, half(0, 1)), (1, half(2, 3))],
+                &[(1, half(2, 3)), (0, half(0, 1))]
+            )
+            .is_ok()
         );
     }
 
+    /// A seq no half claims is an edge removed since the last compaction, not a defect.
     #[test]
-    fn half_edge_pairing_accepts_equal_value_multisets_in_different_order() {
-        let mut out_halves = [valued_half(0, 1, 7), valued_half(0, 1, 9)];
-        let mut in_halves = [valued_half(0, 1, 9), valued_half(0, 1, 7)];
-        assert!(pair(&mut out_halves, &mut in_halves).is_ok());
+    fn seq_pairing_accepts_a_seq_no_half_claims() {
+        assert!(pair_by_seq(3, &[(0, half(0, 1))], &[(0, half(0, 1))]).is_ok());
     }
 
     #[test]
-    fn half_edge_pairing_rejects_parallel_edges_with_swapped_values() {
-        let mut out_halves = [valued_half(0, 1, 7), valued_half(0, 1, 7)];
-        let mut in_halves = [valued_half(0, 1, 7), valued_half(0, 1, 9)];
-        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
-        assert!(matches!(err, Error::EdgeHalfPropertyMismatch { .. }));
+    fn seq_pairing_rejects_a_seq_with_only_one_half() {
+        let err = pair_by_seq(2, &[(0, half(0, 1)), (1, half(0, 2))], &[(0, half(0, 1))])
+            .expect_err("expected an error");
+
+        let Error::ReverseEdgeNotFound {
+            target,
+            node: owner,
+            direction,
+            ..
+        } = err
+        else {
+            panic!("expected ReverseEdgeNotFound, got {err:?}");
+        };
+        assert_eq!(target, labeled(2));
+        assert_eq!(owner, labeled(0));
+        assert_eq!(direction, "Out");
     }
 
+    /// Both halves exist and claim the same edge, but disagree about which nodes it joins.
     #[test]
-    fn half_edge_pairing_reports_structural_defect_over_value_when_both_differ() {
-        let mut out_halves = [valued_half(0, 1, 7), valued_half(0, 2, 9)];
-        let mut in_halves = [valued_half(0, 1, 7)];
-        let err = pair(&mut out_halves, &mut in_halves).expect_err("expected an error");
+    fn seq_pairing_rejects_halves_of_one_seq_joining_different_nodes() {
+        let err =
+            pair_by_seq(1, &[(0, half(0, 1))], &[(0, half(0, 2))]).expect_err("expected an error");
         assert!(matches!(err, Error::ReverseEdgeNotFound { .. }));
+    }
+
+    /// Two halves of the same direction on one seq would make the edge's degree wrong on that
+    /// side while still leaving every seq paired, so it needs its own rejection.
+    #[test]
+    fn seq_pairing_rejects_a_seq_claimed_twice_in_one_direction() {
+        let err = pair_by_seq(1, &[(0, half(0, 1)), (0, half(0, 1))], &[(0, half(0, 1))])
+            .expect_err("expected an error");
+
+        let Error::DuplicateHalfEdge {
+            edge_seq,
+            direction,
+            ..
+        } = err
+        else {
+            panic!("expected DuplicateHalfEdge, got {err:?}");
+        };
+        assert_eq!(edge_seq, 0);
+        assert_eq!(direction, "Out");
     }
 }
