@@ -66,22 +66,34 @@ pub fn edges_accessor_trait_derive(input: &ItemEnum, config: &EdgeKindConfig) ->
     let vis = &input.vis;
     let schema_ty = &config.schema;
 
-    quote! {
-        #vis trait EdgesAccessor: ::flatpg::graph::GraphView<#schema_ty> {
-            fn edges<'a>(
+    let methods = [
+        (
+            format_ident!("edges"),
+            format_ident!("get_edges"),
+            quote! { ::core::iter::Iterator },
+        ),
+        (
+            format_ident!("edges_with_deleted"),
+            format_ident!("get_edges_with_deleted"),
+            quote! { ::core::iter::ExactSizeIterator },
+        ),
+    ]
+    .map(|(method, graph_method, iterator_trait)| {
+        quote! {
+            fn #method<'a>(
                 &'a self,
                 src_node: ::flatpg::node::NodeId<#schema_ty>,
                 edge_kind: #enum_ident,
                 direction: ::flatpg::edge::Direction,
             ) -> ::core::result::Result<
-                impl ::core::iter::ExactSizeIterator<Item = Edge<'a>> + 'a,
+                impl #iterator_trait<Item = Edge<'a>> + 'a,
                 ::flatpg::error::Error,
             > {
                 use ::core::iter::Iterator as _;
 
                 let graph = self.graph();
                 ::core::result::Result::Ok(graph
-                    .get_edges(src_node, edge_kind, direction)?
+                    .#graph_method(src_node, edge_kind, direction)?
                     .map(move |e| {
                         Edge::new(
                             graph,
@@ -93,6 +105,12 @@ pub fn edges_accessor_trait_derive(input: &ItemEnum, config: &EdgeKindConfig) ->
                         )
                     }))
             }
+        }
+    });
+
+    quote! {
+        #vis trait EdgesAccessor: ::flatpg::graph::GraphView<#schema_ty> {
+            #(#methods)*
         }
 
         impl<T: ::flatpg::graph::GraphView<#schema_ty>> EdgesAccessor for T {}
@@ -195,6 +213,7 @@ mod tests {
 
         let t = find_trait(&file, "EdgesAccessor").expect("EdgesAccessor trait not found");
         assert!(find_trait_method(t, "edges").is_some());
+        assert!(find_trait_method(t, "edges_with_deleted").is_some());
         assert!(has_supertrait(t, "GraphView"));
         assert!(find_impl(&file, "EdgesAccessor", "T").is_some());
     }

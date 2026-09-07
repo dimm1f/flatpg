@@ -117,7 +117,7 @@ fn populated_graph_round_trips_through_raw_graph() {
     let out_edges = graph
         .get_edges(alpha, TestEdge::Labeled, Direction::Out)
         .expect("out edges");
-    assert_eq!(out_edges.len(), 1);
+    assert_eq!(out_edges.count(), 1);
 }
 
 #[test]

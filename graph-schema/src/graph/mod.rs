@@ -145,7 +145,23 @@ impl<S: Schema> Graph<S> {
             _ => Err(Error::node_offset_not_found(node.seq())),
         }
     }
+
+    // Perf: skipping deleted neighbors costs a scan of the node's adjacency range, where
+    // `get_edges_count_with_deleted` answers from the offsets alone.
     pub fn get_edges_count(
+        &self,
+        node_ref: RawNodeId,
+        edge_kind: EdgeKind<S>,
+        direction: Direction,
+    ) -> Result<usize, Error> {
+        match self.get_edges(node_ref.try_into()?, edge_kind, direction) {
+            Ok(edges) => Ok(edges.count()),
+            Err(Error::NodeOffsetNotFound(_)) => Ok(0),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn get_edges_count_with_deleted(
         &self,
         node_ref: RawNodeId,
         edge_kind: EdgeKind<S>,
@@ -160,16 +176,37 @@ impl<S: Schema> Graph<S> {
         }
     }
 
-    /// Returns `src_node`'s `edge_kind` half-edges for `direction`.
+    /// Returns `src_node`'s `edge_kind` half-edges for `direction`, skipping those whose
+    /// neighbor is deleted.
     ///
     /// The iterator borrows the adjacency list in place and allocates nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same condition as [`Graph::get_edges_with_deleted`].
+    pub fn get_edges(
+        &self,
+        src_node: NodeId<S>,
+        edge_kind: EdgeKind<S>,
+        direction: Direction,
+    ) -> Result<impl Iterator<Item = EdgeId<S>>, Error> {
+        Ok(self
+            .get_edges_with_deleted(src_node, edge_kind, direction)?
+            .filter(move |edge| !self.is_node_deleted(edge.neighbor())))
+    }
+
+    /// Returns `src_node`'s `edge_kind` half-edges for `direction`, including those whose
+    /// neighbor is deleted.
+    ///
+    /// The iterator borrows the adjacency list in place and allocates nothing. Deleted
+    /// neighbors are told apart with [`Graph::is_node_deleted`] on [`EdgeId::neighbor`].
     ///
     /// # Panics
     ///
     /// Panics if a neighbor's stored node kind is not part of the schema. Every way of
     /// building a [`Graph`] rejects such a neighbor first, so a graph obtained through this
     /// crate's API cannot hold one.
-    pub fn get_edges(
+    pub fn get_edges_with_deleted(
         &self,
         src_node: NodeId<S>,
         edge_kind: EdgeKind<S>,

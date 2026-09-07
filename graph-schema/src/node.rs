@@ -21,7 +21,8 @@ pub trait StoredNode<S: Schema> {
     }
 
     /// Returns this node's `edge_kind` edges for the source half of the
-    /// schema's direction type (`Out` for `Direction` schemas).
+    /// schema's direction type (`Out` for `Direction` schemas), skipping those
+    /// whose neighbor is deleted.
     ///
     /// # Panics
     ///
@@ -29,7 +30,7 @@ pub trait StoredNode<S: Schema> {
     fn get_edges_out<'a>(
         &'a self,
         edge_kind: EdgeKind<S>,
-    ) -> Result<impl ExactSizeIterator<Item = EdgeId<S>> + 'a, Error>
+    ) -> Result<impl Iterator<Item = EdgeId<S>> + 'a, Error>
     where
         S: 'a,
     {
@@ -41,7 +42,8 @@ pub trait StoredNode<S: Schema> {
     }
 
     /// Returns this node's `edge_kind` edges for the destination half of the
-    /// schema's direction type (`In` for `Direction` schemas).
+    /// schema's direction type (`In` for `Direction` schemas), skipping those
+    /// whose neighbor is deleted.
     ///
     /// # Panics
     ///
@@ -49,11 +51,51 @@ pub trait StoredNode<S: Schema> {
     fn get_edges_in<'a>(
         &'a self,
         edge_kind: EdgeKind<S>,
-    ) -> Result<impl ExactSizeIterator<Item = EdgeId<S>> + 'a, Error>
+    ) -> Result<impl Iterator<Item = EdgeId<S>> + 'a, Error>
     where
         S: 'a,
     {
         self.graph().get_edges(
+            NodeId::new(self.kind(), self.seq()),
+            edge_kind,
+            Direction::dst_half(),
+        )
+    }
+
+    /// Returns [`StoredNode::get_edges_out`]'s edges, including those whose
+    /// neighbor is deleted.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same condition as [`Graph::get_edges`].
+    fn get_edges_out_with_deleted<'a>(
+        &'a self,
+        edge_kind: EdgeKind<S>,
+    ) -> Result<impl ExactSizeIterator<Item = EdgeId<S>> + 'a, Error>
+    where
+        S: 'a,
+    {
+        self.graph().get_edges_with_deleted(
+            NodeId::new(self.kind(), self.seq()),
+            edge_kind,
+            Direction::src_half(),
+        )
+    }
+
+    /// Returns [`StoredNode::get_edges_in`]'s edges, including those whose
+    /// neighbor is deleted.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same condition as [`Graph::get_edges`].
+    fn get_edges_in_with_deleted<'a>(
+        &'a self,
+        edge_kind: EdgeKind<S>,
+    ) -> Result<impl ExactSizeIterator<Item = EdgeId<S>> + 'a, Error>
+    where
+        S: 'a,
+    {
+        self.graph().get_edges_with_deleted(
             NodeId::new(self.kind(), self.seq()),
             edge_kind,
             Direction::dst_half(),

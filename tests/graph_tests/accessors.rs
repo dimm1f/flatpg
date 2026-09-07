@@ -110,6 +110,73 @@ fn stored_edge_struct_and_edge_enum_match_graph_get_edges() {
 }
 
 #[test]
+fn edge_accessors_skip_a_removed_neighbor_unless_the_deleted_variant_is_used() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha0 = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let alpha1 = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    let beta0 = setup.add_node(builders::BetaNodeBuilder::new().build());
+    let beta1 = setup.add_node(builders::BetaNodeBuilder::new().build());
+    setup.add_edge(alpha0, beta0, TestEdge::Plain, None);
+    setup.add_edge(alpha1, beta1, TestEdge::Plain, None);
+    let (graph, ids) = setup.apply(Graph::new()).expect("apply setup");
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.remove_node(&ids[alpha0]);
+    diff.remove_node(&ids[beta1]);
+    let (graph, _) = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let surviving_alpha = AlphaNode::new(&graph, ids[alpha1].seq());
+    let surviving_beta = BetaNode::new(&graph, ids[beta0].seq());
+
+    assert_eq!(
+        surviving_beta
+            .get_edges_in(TestEdge::Plain)
+            .expect("beta0 in edges")
+            .count(),
+        0
+    );
+    assert_eq!(
+        surviving_beta
+            .get_edges_in_with_deleted(TestEdge::Plain)
+            .expect("beta0 in edges")
+            .len(),
+        1
+    );
+    assert_eq!(
+        surviving_alpha
+            .get_edges_out(TestEdge::Plain)
+            .expect("alpha1 out edges")
+            .count(),
+        0
+    );
+    assert_eq!(
+        surviving_alpha
+            .get_edges_out_with_deleted(TestEdge::Plain)
+            .expect("alpha1 out edges")
+            .len(),
+        1
+    );
+
+    assert_eq!(
+        graph
+            .edges(ids[alpha1], TestEdge::Plain, Direction::Out)
+            .expect("alpha1 out edges")
+            .count(),
+        0
+    );
+    assert_eq!(
+        graph
+            .edges_with_deleted(ids[alpha1], TestEdge::Plain, Direction::Out)
+            .expect("alpha1 out edges")
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn in_edge_properties_match_their_edges() {
     let mut diff = GraphDiff::<TestSchema>::default();
     let alpha0 = diff.add_node(builders::AlphaNodeBuilder::new().build());
@@ -202,13 +269,13 @@ fn stored_node_edge_accessors_return_incident_edges() {
         alpha0
             .get_edges_in(TestEdge::Labeled)
             .expect("alpha0 in edges")
-            .len(),
+            .count(),
         0
     );
     assert_eq!(
         beta.get_edges_out(TestEdge::Labeled)
             .expect("beta out edges")
-            .len(),
+            .count(),
         0
     );
 }

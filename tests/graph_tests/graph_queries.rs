@@ -7,7 +7,9 @@ use flatpg::{
 };
 use test_fixtures::*;
 
-use crate::common::{collect_edges, setup_graph_with_fan_out_edges, setup_three_file_nodes};
+use crate::common::{
+    collect_edges, setup_graph_with_fan_out_edges, setup_three_file_nodes, string_value,
+};
 
 #[test]
 fn graph_default_matches_a_freshly_built_empty_graph() {
@@ -91,6 +93,126 @@ fn get_edges_count_matches_the_number_of_out_edges_and_zero_for_a_phantom_seq() 
     assert_eq!(
         graph
             .get_edges_count(phantom, TestEdge::Plain, Direction::Out)
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn get_edges_skips_an_edge_whose_neighbor_was_removed() {
+    let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.remove_node(&betas[1]);
+    let (graph, _) = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut live: Vec<usize> = collect_edges(&graph, alpha, TestEdge::Plain, Direction::Out)
+        .iter()
+        .map(|edge| edge.neighbor().seq())
+        .collect();
+    live.sort_unstable();
+    assert_eq!(live, vec![betas[0].seq(), betas[2].seq()]);
+
+    let mut all: Vec<usize> = graph
+        .get_edges_with_deleted(alpha, TestEdge::Plain, Direction::Out)
+        .expect("out edges")
+        .map(|edge| edge.neighbor().seq())
+        .collect();
+    all.sort_unstable();
+    assert_eq!(
+        all,
+        vec![betas[0].seq(), betas[1].seq(), betas[2].seq()],
+        "get_edges_with_deleted still lists the edge to the tombstoned neighbor"
+    );
+}
+
+#[test]
+fn get_edges_keeps_each_surviving_edge_paired_with_its_own_property() {
+    let mut setup = GraphDiff::<TestSchema>::default();
+    let alpha_id = setup.add_node(builders::AlphaNodeBuilder::new().build());
+    for i in 0..3 {
+        let beta_id = setup.add_node(builders::BetaNodeBuilder::new().build());
+        setup.add_edge(
+            alpha_id,
+            beta_id,
+            TestEdge::Labeled,
+            Some(PropertyValue::String(format!("p{i}"))),
+        );
+    }
+    let (graph, _) = setup.apply(Graph::new()).expect("apply setup");
+
+    let alpha = graph
+        .nodes_by_kind(TestNode::Alpha)
+        .next()
+        .expect("Alpha node");
+    let betas: Vec<NodeId<TestSchema>> = graph.nodes_by_kind(TestNode::Beta).collect();
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.remove_node(&betas[0]);
+    let (graph, _) = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let mut labeled: Vec<(usize, String)> = graph
+        .get_edges(alpha, TestEdge::Labeled, Direction::Out)
+        .expect("out edges")
+        .map(|edge| {
+            let neighbor = edge.neighbor().seq();
+            let prop = graph
+                .get_edge_property(edge)
+                .expect("edge property lookup")
+                .expect("Labeled edges carry a property");
+            (neighbor, string_value(&graph, prop))
+        })
+        .collect();
+    labeled.sort();
+    assert_eq!(
+        labeled,
+        vec![
+            (betas[1].seq(), "p1".to_string()),
+            (betas[2].seq(), "p2".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn get_edges_count_skips_a_removed_neighbor_that_with_deleted_still_counts() {
+    let (graph, alpha, betas) = setup_graph_with_fan_out_edges();
+
+    let mut diff = GraphDiff::<TestSchema>::default();
+    diff.remove_node(&betas[1]);
+    let (graph, _) = diff.apply(graph).expect("apply diff");
+    graph
+        .check_integrity()
+        .expect("graph passes integrity check");
+
+    let alpha = RawNodeId::from(&alpha);
+    assert_eq!(
+        graph
+            .get_edges_count(alpha, TestEdge::Plain, Direction::Out)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        graph
+            .get_edges_count_with_deleted(alpha, TestEdge::Plain, Direction::Out)
+            .unwrap(),
+        3
+    );
+}
+
+#[test]
+fn get_edges_count_with_deleted_is_zero_for_a_phantom_seq() {
+    let (graph, _alpha, _betas) = setup_graph_with_fan_out_edges();
+    let phantom = RawNodeId::new(TestNode::Alpha.index(), 9999);
+
+    assert_eq!(
+        graph
+            .get_edges_count_with_deleted(phantom, TestEdge::Plain, Direction::Out)
             .unwrap(),
         0
     );

@@ -218,6 +218,13 @@ impl<S: Schema> EdgeId<S> {
         self.dst_node
     }
 
+    pub fn neighbor(&self) -> NodeId<S> {
+        match self.direction {
+            Direction::Out => self.dst_node,
+            Direction::In => self.src_node,
+        }
+    }
+
     pub fn kind(&self) -> EdgeKind<S> {
         self.kind
     }
